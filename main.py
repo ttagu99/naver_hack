@@ -98,10 +98,6 @@ def bind_model(model):
             reference_vecs = np.array(reference_veclist)
             print('reference_vecs', reference_vecs.shape)
 
-            reference_img = get_feature_layer([reference_img, 0])[0]
-            print('vsreference_img',reference_img.shape)
-
-
             with open(db_output, 'wb') as f:
                 pickle.dump(reference_vecs, f)
 

@@ -37,6 +37,29 @@ from imgaug import augmenters as iaa
 import random
 from keras.utils.training_utils import multi_gpu_model
 
+def get_tta_image(image, tta):
+    images=[]
+    temp = image
+    images.append(temp)
+    if tta == 8:
+        for i in range(3):
+            temp = np.rot90(temp)
+            images.append(temp)
+        for i in range(len(images)):
+            images.append(np.fliplr(images[i])) 
+    npimage = np.concatenate([images])
+    return npimage
+
+def predict_tta(model, img, tta=8):
+    img_ttas = get_tta_image(img,tta)
+    ouputs = []
+    for img_tta in img_ttas:
+        img_tta = np.expand_dims(img_tta, axis=0)
+        output = model.predict(img_tta)[0]
+        ouputs.append(output) 
+    ouputs = np.array(ouputs)
+    return ouputs
+ 
 def bind_model(model):
     def save(dir_name):
         os.makedirs(dir_name, exist_ok=True)
@@ -71,12 +94,15 @@ def bind_model(model):
         intermediate_layer_model = Model(inputs=model.input,outputs=model.layers[-2].output)
         print('inference start')
 
+        # tta = 8
+        # only concate, because we cal distance!
+         
         # inference
         query_veclist=[]
         for img in query_img:
             img = np.expand_dims(img, axis=0)
             print(img.shape)
-            output = intermediate_layer_model.predict(img)[0]
+            output = predict_tta(model,img,8)
             query_veclist.append(output) 
         query_vecs = np.array(query_veclist)
 
@@ -91,7 +117,7 @@ def bind_model(model):
             for img in reference_img:
                 img = np.expand_dims(img, axis=0)
                 print(img.shape)
-                output = intermediate_layer_model.predict(img)[0]
+                output = predict_tta(model,img,8)
                 reference_veclist.append(output) 
             reference_vecs = np.array(reference_veclist)
 
@@ -161,27 +187,6 @@ def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imag
             layer.trainable = False
     return model
 
-def image_generator(batchsize, aug = True):
-    while True:
-        for k in np.random.permutation(NCSVS):
-            if k==vn:
-                continue
-            filename = os.path.join(DP_DIR, 'train_k{}.csv.gz'.format(k))
-            for df in pd.read_csv(filename, chunksize=batchsize):
-                df['drawing'] = df['drawing'].apply(json.loads)
-                
-                x = np.zeros((len(df), size, size, channels))
-                for i, raw_strokes in enumerate(df.drawing.values):
-                    if channels ==1:
-                        x[i, :, :, 0] = draw_cv2(raw_strokes, size=size, lw=lw,
-                                                 time_color=time_color)
-                    else:
-                        x[i, :, :, ] = draw_cv2_color_new(raw_strokes, size=size, lw=lw,
-                                                 time_color=time_color)                        
-                x = preprocess_input(x).astype(np.float32)
-                y = keras.utils.to_categorical(df.y, num_classes=NCATS)
-                yield x, y
-
 if __name__ == '__main__':
     args = argparse.ArgumentParser()
 
@@ -232,7 +237,6 @@ if __name__ == '__main__':
     input_shape = CONF_LIST[SEL_CONF]['input_shape']
     SEED = CONF_LIST[SEL_CONF]['SEED']
     backbone = CONF_LIST[SEL_CONF]['backbone']
-
 
     """ Model """
     model = build_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes, base_freeze = True)
