@@ -37,16 +37,41 @@ from imgaug import augmenters as iaa
 import random
 from keras.utils.training_utils import multi_gpu_model
 
+
+def get_tta_image(image, tta):
+    images=[]
+    temp = image
+    images.append(temp)
+    if tta == 8:
+        for i in range(3):
+            temp = np.rot90(temp)
+            images.append(temp)
+        for i in range(len(images)):
+            images.append(np.fliplr(images[i])) 
+    return images
+
+def predict_tta(model, img, tta=8, use_avg=False):
+    img_ttas = get_tta_image(img,tta)
+    outputs = []
+    for img_tta in img_ttas:
+        img_tta = np.expand_dims(img_tta, axis=0)
+        output = model.predict(img_tta)[0]
+        outputs.append(output)
+    if use_avg ==False:
+        outputs = np.concatenate(outputs)
+    else:
+        outputs = np.average(outputs, axis=0)
+    print(outputs.shape)
+    return outputs
+ 
 def bind_model(model):
     def save(dir_name):
         os.makedirs(dir_name, exist_ok=True)
-        #model.save(os.path.join(dir_name, 'model'))
         model.save_weights(os.path.join(dir_name, 'model'))
         print('model saved!', os.path.join(dir_name, 'model'))
 
     def load(file_path):
         model.load_weights(file_path)
-        #model = load_model(file_path)
         print('model loaded!', file_path)
 
     def infer(queries, db):
@@ -76,9 +101,7 @@ def bind_model(model):
         # inference
         query_veclist=[]
         for img in query_img:
-            img = np.expand_dims(img, axis=0)
-            print(img.shape)
-            output = intermediate_layer_model.predict(img)[0]
+            output = predict_tta(intermediate_layer_model,img,8,use_avg=False)
             query_veclist.append(output) 
         query_vecs = np.array(query_veclist)
 
@@ -91,12 +114,9 @@ def bind_model(model):
             reference_veclist=[]
             print('reference',reference_img.shape)
             for img in reference_img:
-                img = np.expand_dims(img, axis=0)
-                print(img.shape)
-                output = intermediate_layer_model.predict(img)[0]
+                output = predict_tta(intermediate_layer_model,img,8,use_avg=False)
                 reference_veclist.append(output) 
             reference_vecs = np.array(reference_veclist)
-            print('reference_vecs', reference_vecs.shape)
 
             with open(db_output, 'wb') as f:
                 pickle.dump(reference_vecs, f)
@@ -105,6 +125,7 @@ def bind_model(model):
         query_vecs = l2_normalize(query_vecs)
         reference_vecs = l2_normalize(reference_vecs)
 
+        print(query_vecs.shape, reference_vecs.shape)
         # Calculate cosine similarity
         sim_matrix = np.dot(query_vecs, reference_vecs.T)
 
@@ -131,7 +152,6 @@ def l2_normalize(v):
     if norm == 0:
         return v
     return v / norm
-
 
 # data preprocess
 def preprocess(queries, db):
@@ -222,12 +242,12 @@ if __name__ == '__main__':
     config = args.parse_args()
 
     NUM_GPU = 1
-    SEL_CONF = 3
+    SEL_CONF = 0
     CV_NUM = 2
 
     CONF_LIST = []
     CONF_LIST.append({'name':'Xception', 'input_shape':(224, 224, 3), 'backbone':Xception
-                    , 'batch_size':100 ,'fc_train_batch':260, 'SEED':111,'start_lr':0.0005
+                    , 'batch_size':100 ,'fc_train_batch':330, 'SEED':111,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15, 'fc_train_epoch':10})
     CONF_LIST.append({'name':'Resnet50', 'input_shape':(224, 224, 3), 'backbone':ResNet50
                     , 'batch_size':100 ,'fc_train_batch':260, 'SEED':111,'start_lr':0.0005
@@ -351,7 +371,6 @@ if __name__ == '__main__':
 
         #nsml.load(checkpoint='70', session='Zonber/ir_ph1_v2/163')
         train_gen = DataGenerator(xx_train, yy_train,fc_train_batch,seq,num_classes,use_aug=True)
-        #train_gen = generator(xx_train, yy_train,fc_train_batch,seq,num_classes,use_aug=True)
         hist1 = model.fit_generator(train_gen,validation_data= (xx_val,yy_val), workers=8, use_multiprocessing=True
                 ,  epochs=fc_train_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
 
@@ -361,11 +380,10 @@ if __name__ == '__main__':
                       optimizer=opt,
                       metrics=['accuracy']) 
         
-        #model.load_weights(best_model_path)
+        model.load_weights(best_model_path)
         print('load model:' ,best_model_path)
 
         train_gen = DataGenerator(xx_train, yy_train,batch_size,seq,num_classes,use_aug=True)
-        #train_gen = generator(xx_train, yy_train,batch_size,seq,num_classes,use_aug=True)
         hist2 = model.fit_generator(train_gen ,validation_data= (xx_val,yy_val), workers=8, use_multiprocessing=True
                  ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
 

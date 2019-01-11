@@ -25,8 +25,7 @@
   <ItemGroup>
     <Compile Include="data_loader.py" />
     <Compile Include="main.py" />
-    <Compile Include="emsemble_cv.py" />
-    <Compile Include="no_train.py" />
+    <Compile Include="ensemble_cv.py" />
     <Compile Include="setup.py" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
