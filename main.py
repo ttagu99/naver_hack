@@ -69,7 +69,7 @@ def predict_tta(model, img, tta=8, use_avg=False):
 def normal_input(img, mean_arr):
     img = img.astype('float32')
     img /= 255
-    #img -= mean_arr
+    img -= mean_arr
     return img
  
 def bind_model(model):
@@ -361,7 +361,7 @@ if __name__ == '__main__':
         best_model_paths = []
         for cv in range(CV_NUM):
             cur_seed = SEED + cv
-
+            opt = keras.optimizers.Adam(lr=start_lr)
             model = build_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt, NUM_GPU=NUM_GPU)
             xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
             xx_val = normal_input(xx_val,mean_arr)
@@ -431,4 +431,4 @@ if __name__ == '__main__':
         en_model = ensemble_feature_vec(feature_models,model_input, num_classes)
         en_model.save('./ensemble.h5')
         nsml.report(summary=True)
-        nsml.save(prefix +'CV_U2G_NOME_W8' + str(CV_NUM))
+        nsml.save(prefix +'CV_U2G_W8_OPTRE' + str(CV_NUM))
