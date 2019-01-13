@@ -69,7 +69,7 @@ def predict_tta(model, img, tta=8, use_avg=False):
 def normal_input(img, mean_arr):
     img = img.astype('float32')
     img /= 255
-    img -= mean_arr
+    #img -= mean_arr
     return img
  
 def bind_model(model):
@@ -265,7 +265,7 @@ if __name__ == '__main__':
     args.add_argument('--g', type=int, default=0, help='gpu')
     config = args.parse_args()
 
-    NUM_GPU = 2
+    NUM_GPU = 1
     SEL_CONF = 3
     CV_NUM = 3
 
@@ -406,7 +406,7 @@ if __name__ == '__main__':
             callbacks = [reduce_lr,early_stop,checkpoint,report]
 
             train_gen = DataGenerator(xx_train, yy_train,fc_train_batch,seq,num_classes,use_aug=True,mean = mean_arr)
-            hist1 = model.fit_generator(train_gen,validation_data= (xx_val,yy_val)#, workers=8, use_multiprocessing=True
+            hist1 = model.fit_generator(train_gen,validation_data= (xx_val,yy_val), workers=8, use_multiprocessing=True
                     ,  epochs=fc_train_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
 
             for layer in model.layers:
@@ -417,7 +417,7 @@ if __name__ == '__main__':
             print('load model:' ,best_model_path)
 
             train_gen = DataGenerator(xx_train, yy_train,batch_size,seq,num_classes,use_aug=True,mean = mean_arr)
-            hist2 = model.fit_generator(train_gen ,validation_data= (xx_val,yy_val)#, workers=8, use_multiprocessing=True
+            hist2 = model.fit_generator(train_gen ,validation_data= (xx_val,yy_val), workers=8, use_multiprocessing=True
                      ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
         print('all cv model train complete, now cv model saving start')
         feature_models = []
@@ -431,4 +431,4 @@ if __name__ == '__main__':
         en_model = ensemble_feature_vec(feature_models,model_input, num_classes)
         en_model.save('./ensemble.h5')
         nsml.report(summary=True)
-        nsml.save(prefix +'CV_U2G' + str(CV_NUM))
+        nsml.save(prefix +'CV_U2G_NOME_W8' + str(CV_NUM))
