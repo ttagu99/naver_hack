@@ -69,7 +69,7 @@ def predict_tta(model, img, tta=8, use_avg=False):
 def normal_input(img, mean_arr):
     img = img.astype('float32')
     img /= 255
-    img -= mean_arr
+    #img -= mean_arr
     return img
  
 def bind_model(model):
@@ -267,7 +267,7 @@ if __name__ == '__main__':
 
     NUM_GPU = 1
     SEL_CONF = 3
-    CV_NUM = 3
+    CV_NUM = 2
 
     CONF_LIST = []
     CONF_LIST.append({'name':'Xc', 'input_shape':(224, 224, 3), 'backbone':Xception
@@ -430,5 +430,6 @@ if __name__ == '__main__':
         model_input = Input(shape=input_shape)
         en_model = ensemble_feature_vec(feature_models,model_input, num_classes)
         en_model.save('./ensemble.h5')
+        print('save model:',prefix +'CV_W8_NOME_OPTRE' + str(CV_NUM))
         nsml.report(summary=True)
-        nsml.save(prefix +'CV_U2G_W8_OPTRE' + str(CV_NUM))
+        nsml.save(prefix +'CV_W8_NOME_OPTRE' + str(CV_NUM))
