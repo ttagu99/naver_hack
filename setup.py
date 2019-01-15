@@ -8,6 +8,7 @@ setup(
     description='nsml vision hackathon',
     install_requires=[
         'scikit-learn',
-        'imgaug'
+        'imgaug',
+        'scikit-cuda'
     ]
 )

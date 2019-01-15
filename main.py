@@ -267,7 +267,7 @@ if __name__ == '__main__':
 
     NUM_GPU = 1
     SEL_CONF = 3
-    CV_NUM = 2
+    CV_NUM = 5
 
     CONF_LIST = []
     CONF_LIST.append({'name':'Xc', 'input_shape':(224, 224, 3), 'backbone':Xception
@@ -293,6 +293,7 @@ if __name__ == '__main__':
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
 
     # training parameters
+    use_merge_bind = False
     nb_epoch = CONF_LIST[SEL_CONF]['epoch']
     fc_train_epoch = CONF_LIST[SEL_CONF]['fc_train_epoch']
     fc_train_batch = CONF_LIST[SEL_CONF]['fc_train_batch']
@@ -309,15 +310,20 @@ if __name__ == '__main__':
 
     """ CV Model """
     opt = keras.optimizers.Adam(lr=start_lr)
-    feature_models = []
-    for cv in range(CV_NUM):
-        temp_model = build_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt)
-        feature_model = Model(inputs=temp_model.inputs,outputs = temp_model.layers[-2].output)
-        feature_models.append(feature_model)
-    model_input = Input(shape=input_shape)
-    en_model = ensemble_feature_vec(feature_models,model_input, num_classes)
-    bind_model(en_model)
-    en_model.summary()
+    if use_merge_bind == True:
+        feature_models = []
+        for cv in range(CV_NUM):
+            temp_model = build_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt)
+            feature_model = Model(inputs=temp_model.inputs,outputs = temp_model.layers[-2].output)
+            feature_models.append(feature_model)
+        model_input = Input(shape=input_shape)
+        en_model = ensemble_feature_vec(feature_models,model_input, num_classes)
+        bind_model(en_model)
+        en_model.summary()
+    else:
+        model = build_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt)
+        bind_model(model)
+        model.summary()
 
     """ Load data """
     print('dataset path', DATASET_PATH)
@@ -419,17 +425,22 @@ if __name__ == '__main__':
             train_gen = DataGenerator(xx_train, yy_train,batch_size,seq,num_classes,use_aug=True,mean = mean_arr)
             hist2 = model.fit_generator(train_gen ,validation_data= (xx_val,yy_val), workers=8, use_multiprocessing=True
                      ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
-        print('all cv model train complete, now cv model saving start')
-        feature_models = []
-        for bp in best_model_paths:
-            temp_model = load_model(bp)
-            feature_model = Model(inputs=temp_model.inputs,outputs = temp_model.layers[-2].output)
-            feature_models.append(feature_model)
 
+            model.load_weights(best_model_path)
+            nsml.save(prefix + str(cv))
 
-        model_input = Input(shape=input_shape)
-        en_model = ensemble_feature_vec(feature_models,model_input, num_classes)
-        en_model.save('./ensemble.h5')
-        print('save model:',prefix +'CV_W8_NOME_OPTRE' + str(CV_NUM))
-        nsml.report(summary=True)
-        nsml.save(prefix +'CV_W8_NOME_OPTRE' + str(CV_NUM))
+        if use_merge_bind == True:
+            print('all cv model train complete, now cv model saving start')
+            feature_models = []
+            for bp in best_model_paths:
+                temp_model = load_model(bp)
+                feature_model = Model(inputs=temp_model.inputs,outputs = temp_model.layers[-2].output)
+                feature_models.append(feature_model)
+
+            model_input = Input(shape=input_shape)
+            en_model = ensemble_feature_vec(feature_models,model_input, num_classes)
+            en_model.save('./ensemble.h5')
+            print('save model:',prefix +'Merge' + str(CV_NUM))
+            nsml.report(summary=True)
+            nsml.save(prefix +'Merge' + str(CV_NUM))
+            #why.. low score 0.013....2cv
