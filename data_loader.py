@@ -18,14 +18,14 @@ def train_data_loader(data_path, img_size, output_path):
             continue
         for filename in files:
             img_path = os.path.join(root, filename)
-            try:
-                img = cv2.imread(img_path, 1)
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                img = cv2.resize(img, img_size)
-            except:
-                continue
+            #try:
+            #    img = cv2.imread(img_path, 1)
+            #    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            #    img = cv2.resize(img, img_size)
+            #except:
+            #    continue
             label_list.append(label_idx)
-            img_list.append(img)
+            img_list.append(img_path)
         label_idx += 1
 
     # write output file for caching
