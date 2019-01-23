@@ -279,7 +279,7 @@ if __name__ == '__main__':
     config = args.parse_args()
 
     NUM_GPU = 1
-    SEL_CONF = 3
+    SEL_CONF = 2
     CV_NUM = 5
 
     CONF_LIST = []
@@ -383,18 +383,18 @@ if __name__ == '__main__':
             opt = keras.optimizers.Adam(lr=start_lr)
             model = build_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt, NUM_GPU=NUM_GPU)
             xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
-            val_imgs =[]
-            for img_path in xx_val:
-                try:
-                    img = cv2.imread(img_path, 1)
-                    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                    img = cv2.resize(img, (input_shape[0],input_shape[1]))
-                except:
-                    continue
-                val_imgs.append(img)
-            xx_val = np.array(val_imgs)
+            #val_imgs =[]
+            #for img_path in xx_val:
+            #    try:
+            #        img = cv2.imread(img_path, 1)
+            #        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            #        img = cv2.resize(img, (input_shape[0],input_shape[1]))
+            #    except:
+            #        continue
+            #    val_imgs.append(img)
+            #xx_val = np.array(val_imgs)
 
-            xx_val = normal_input(xx_val)
+            #xx_val = normal_input(xx_val)
             print('shape:',xx_train.shape,'val shape:',xx_val.shape)
             sometimes = lambda aug: iaa.Sometimes(0.5, aug)
             seq = iaa.Sequential(
@@ -436,7 +436,9 @@ if __name__ == '__main__':
             callbacks = [reduce_lr,early_stop,checkpoint,report]
 
             train_gen = DataGenerator(xx_train,input_shape, yy_train,fc_train_batch,seq,num_classes,use_aug=True,mean = mean_arr)
-            hist1 = model.fit_generator(train_gen,validation_data= (xx_val,yy_val), workers=8, use_multiprocessing=True
+            val_gen = DataGenerator(xx_val,input_shape, yy_val,fc_train_batch,seq,num_classes,use_aug=False,shuffle=False, mean = mean_arr)
+
+            hist1 = model.fit_generator(train_gen, validation_data=val_gen, workers=8, use_multiprocessing=True
                     ,  epochs=fc_train_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
 
             for layer in model.layers:
@@ -447,7 +449,8 @@ if __name__ == '__main__':
             print('load model:' ,best_model_path)
 
             train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,mean = mean_arr)
-            hist2 = model.fit_generator(train_gen ,validation_data= (xx_val,yy_val), workers=8, use_multiprocessing=True
+            val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False, mean = mean_arr)
+            hist2 = model.fit_generator(train_gen ,validation_data= val_gen, workers=8, use_multiprocessing=True
                      ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
 
             model.load_weights(best_model_path)
