@@ -44,26 +44,44 @@ def get_tta_image(image, tta):
     images=[]
     temp = image
     images.append(temp)
-    if tta == 8:
+    if tta ==2:
+        images.append(np.fliplr(temp))
+    elif tta ==4:
+        images.append(np.fliplr(temp))
+        for i in range(len(images)):
+            images.append(np.flipud(images[i]))
+    elif tta == 8:
         for i in range(3):
             temp = np.rot90(temp)
             images.append(temp)
         for i in range(len(images)):
             images.append(np.fliplr(images[i])) 
+    else:
+        pass
     return images
 
-def predict_tta(model, img, tta=8, use_avg=False):
-    img_ttas = get_tta_image(img,tta)
-    outputs = []
-    for img_tta in img_ttas:
-        img_tta = np.expand_dims(img_tta, axis=0)
-        output = model.predict(img_tta)[0]
-        outputs.append(output)
-    if use_avg ==False:
-        outputs = np.concatenate(outputs)
-    else:
-        outputs = np.average(outputs, axis=0)
-    print(outputs.shape)
+def predict_tta_batch(model, imgs, tta=8, batch_size = 100, use_avg=False):
+    all_set_num = len(imgs)
+    tta_batch_num = batch_size*tta
+    outputs  = []
+    for start in range(0,all_set_num,tta_batch_num):
+        end = start+tta_batch_num
+        end = min(end, all_set_num)
+        cur_batch_imgs = imgs[start:end]
+
+        cur_batch_img_ttas= []
+        for img in cur_batch_imgs:
+            cur_batch_img_ttas += get_tta_image(img,tta)
+        cur_batch = np.array(cur_batch_img_ttas)
+        cur_output = model.predict(cur_batch)
+        for tta_start in range(0,len(cur_output),tta):
+            tta_end = tta_start+tta
+            per_one_img_output = cur_output[tta_start:tta_end]
+            if use_avg ==False:
+                per_one_img_output = np.concatenate(per_one_img_output)
+            else:
+                per_one_img_output = np.average(per_one_img_output,axis=0)
+            outputs.append(per_one_img_output)
     return outputs
 
 def normal_inputs(imgs, mean_arr=None):
@@ -110,14 +128,14 @@ def bind_model(model):
         query_img = normal_inputs(query_img)
         reference_img = normal_inputs(reference_img)
 
+        infer_img_batch = 100
+        TTA = 2
         intermediate_layer_model = Model(inputs=model.input,outputs=model.layers[-2].output)
         print('inference start')
 
         # inference
         query_veclist=[]
-        for img in query_img:
-            output = predict_tta(intermediate_layer_model,img,8,use_avg=False)
-            query_veclist.append(output) 
+        query_veclist = predict_tta_batch(intermediate_layer_model,query_img,tta=TTA,batch_size=infer_img_batch,use_avg=False)
         query_vecs = np.array(query_veclist)
 
         # caching db output, db inference
@@ -127,10 +145,11 @@ def bind_model(model):
                 reference_vecs = pickle.load(f)
         else:
             reference_veclist=[]
-            print('reference',reference_img.shape)
-            for img in reference_img:
-                output = predict_tta(intermediate_layer_model,img,8,use_avg=False)
-                reference_veclist.append(output) 
+            if isinstance(reference_img, (list,)):
+                print('reference',len(reference_img))
+            else:
+                print('reference',reference_img.shape)
+            reference_veclist = predict_tta_batch(intermediate_layer_model,reference_img,tta=TTA,batch_size=infer_img_batch,use_avg=False)
             reference_vecs = np.array(reference_veclist)
 
             with open(db_output, 'wb') as f:
@@ -147,10 +166,9 @@ def bind_model(model):
         indices = np.flip(indices, axis=1)
 
         retrieval_results = {}
-
         for (i, query) in enumerate(queries):
             query = query.split('/')[-1].split('.')[0]
-            ranked_list = [references[k] for k in indices[i]]
+            ranked_list = [references[k].split('/')[-1].split('.')[0] for k in indices[i]]
             ranked_list = ranked_list[:1000]
 
             retrieval_results[query] = ranked_list
@@ -377,92 +395,6 @@ if __name__ == '__main__':
     bTrainmode = False
     if config.mode == 'train':
         bTrainmode = True
-
-        x_train = np.asarray(img_list)
-        labels = np.asarray(label_list)
-        y_train = keras.utils.to_categorical(labels, num_classes=num_classes)
-
-        print(len(labels), 'train samples')
-
-        best_model_paths = []
-        for cv in range(CV_NUM):
-            cur_seed = SEED + cv
-            opt = keras.optimizers.Adam(lr=start_lr)
-            model = build_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt, NUM_GPU=NUM_GPU)
-            xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
-            print('shape:',xx_train.shape,'val shape:',xx_val.shape)
-            sometimes = lambda aug: iaa.Sometimes(0.5, aug)
-            seq = iaa.Sequential(
-                [
-                    iaa.SomeOf((0, 3),[
-                    iaa.Fliplr(0.5), # horizontally flip 50% of all images
-                    iaa.Flipud(0.2), # vertically flip 20% of all images
-                    sometimes(iaa.CropAndPad(
-                        percent=(-0.05, 0.1),
-                        pad_mode=['reflect']
-                    )),
-                    sometimes( iaa.OneOf([
-                        iaa.Affine(rotate=0),
-                        iaa.Affine(rotate=90),
-                        iaa.Affine(rotate=180),
-                        iaa.Affine(rotate=270)
-                    ])),
-                    sometimes(iaa.Affine(
-                        scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
-                        translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
-                        rotate=(-45, 45), # rotate by -45 to +45 degrees
-                        shear=(-5, 5), 
-                        order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
-                        mode=['reflect'] 
-                    ))
-                    ]),
-                ],
-                random_order=True
-            )
-
-            """ Callback """
-            monitor = 'val_acc'
-            reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=9,factor=0.2,verbose=1)
-            early_stop = EarlyStopping(monitor=monitor, patience=20)
-            best_model_path = './best_model' + str(cur_seed) + '.h5'
-            best_model_paths.append(best_model_path)
-            checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
-            report = report_nsml(prefix = prefix,seed = cur_seed)
-            callbacks = [reduce_lr,early_stop,checkpoint,report]
-
-            train_gen = DataGenerator(xx_train,input_shape, yy_train,fc_train_batch,seq,num_classes,use_aug=True,mean = mean_arr)
-            val_gen = DataGenerator(xx_val,input_shape, yy_val,fc_train_batch,seq,num_classes,use_aug=False,shuffle=False, mean = mean_arr)
-
-            hist1 = model.fit_generator(train_gen, validation_data=val_gen, workers=8, use_multiprocessing=True
-                    ,  epochs=fc_train_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
-
-            for layer in model.layers:
-                layer.trainable=True
-            model.compile(loss='categorical_crossentropy',  optimizer=opt,  metrics=['accuracy']) 
-        
-            model.load_weights(best_model_path)
-            print('load model:' ,best_model_path)
-
-            train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,mean = mean_arr)
-            val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False, mean = mean_arr)
-            hist2 = model.fit_generator(train_gen ,validation_data= val_gen, workers=8, use_multiprocessing=True
-                     ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
-
-            model.load_weights(best_model_path)
-            nsml.save(prefix + str(cv))
-
-        if use_merge_bind == True:
-            print('all cv model train complete, now cv model saving start')
-            feature_models = []
-            for bp in best_model_paths:
-                temp_model = load_model(bp)
-                feature_model = Model(inputs=temp_model.inputs,outputs = temp_model.layers[-2].output)
-                feature_models.append(feature_model)
-
-            model_input = Input(shape=input_shape)
-            en_model = ensemble_feature_vec(feature_models,model_input, num_classes)
-            en_model.save('./ensemble.h5')
-            print('save model:',prefix +'Merge' + str(CV_NUM))
-            nsml.report(summary=True)
-            nsml.save(prefix +'Merge' + str(CV_NUM))
-            #why.. low score 0.013....2cv
+        #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
+        nsml.load(checkpoint='IR0', session='Zonber/ir_ph2/8') #InceptionResnetV2 222
+        nsml.save(0)  # this is display model name at lb
