@@ -73,7 +73,9 @@ def predict_tta_batch(model, imgs, tta=8, batch_size = 100, use_avg=False):
         for img in cur_batch_imgs:
             cur_batch_img_ttas += get_tta_image(img,tta)
         cur_batch = np.array(cur_batch_img_ttas)
+        #print('cur_batch.shape',cur_batch.shape)
         cur_output = model.predict(cur_batch)
+        #print('len cur_output',len(cur_output))
         for tta_start in range(0,len(cur_output),tta):
             tta_end = tta_start+tta
             per_one_img_output = cur_output[tta_start:tta_end]
@@ -117,6 +119,12 @@ def bind_model(model):
 
         queries, query_img, references, reference_img = preprocess(queries, db)
 
+        # debuging all set size
+        # queries = query_img*901
+        # references = references*3674
+        # query_img = query_img*901
+        # reference_img = reference_img*3674
+
         print('test data load queries {} query_img {} references {} reference_img {}'.
               format(len(queries), len(query_img), len(references), len(reference_img)))
 
@@ -128,6 +136,8 @@ def bind_model(model):
         query_img = normal_inputs(query_img)
         reference_img = normal_inputs(reference_img)
 
+
+
         infer_img_batch = 100
         TTA = 2
         intermediate_layer_model = Model(inputs=model.input,outputs=model.layers[-2].output)
@@ -137,23 +147,15 @@ def bind_model(model):
         query_veclist=[]
         query_veclist = predict_tta_batch(intermediate_layer_model,query_img,tta=TTA,batch_size=infer_img_batch,use_avg=False)
         query_vecs = np.array(query_veclist)
-
-        # caching db output, db inference
-        db_output = './db_infer.pkl'
-        if os.path.exists(db_output):
-            with open(db_output, 'rb') as f:
-                reference_vecs = pickle.load(f)
+        print('query_vecs shape:',query_vecs.shape)
+        reference_veclist=[]
+        if isinstance(reference_img, (list,)):
+            print('reference',len(reference_img))
         else:
-            reference_veclist=[]
-            if isinstance(reference_img, (list,)):
-                print('reference',len(reference_img))
-            else:
-                print('reference',reference_img.shape)
-            reference_veclist = predict_tta_batch(intermediate_layer_model,reference_img,tta=TTA,batch_size=infer_img_batch,use_avg=False)
-            reference_vecs = np.array(reference_veclist)
-
-            with open(db_output, 'wb') as f:
-                pickle.dump(reference_vecs, f)
+            print('reference',reference_img.shape)
+        reference_veclist = predict_tta_batch(intermediate_layer_model,reference_img,tta=TTA,batch_size=infer_img_batch,use_avg=False)
+        reference_vecs = np.array(reference_veclist)
+        print('reference_vecs shape:',reference_vecs.shape)
 
         # l2 normalization
         query_vecs = l2_normalize(query_vecs)
@@ -220,10 +222,7 @@ def read_image(img_path,shape):
 def read_image_batch(image_paths, shape):
     images = []
     for img_path in image_paths:
-        try:
-            img = read_image(img_path,shape)
-        except:
-            continue
+        img = read_image(img_path,shape)
         images.append(img)
     return images
 

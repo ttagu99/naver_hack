@@ -74,7 +74,7 @@ def build_triple_base_model(backbone= None, input_shape =  (224,224,3), use_imag
     return model
 
 def build_triple_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, opt = SGD()):
-    bs_model=build_triple_base_model(backbone= backbone, input_shape =  (224,224,3), use_imagenet =use_imagenet)
+    bs_model=build_triple_base_model(backbone= None, input_shape =  (224,224,3), use_imagenet =use_imagenet)
     input_a=Input(shape=input_shape)
     input_p=Input(shape=input_shape)
     input_n=Input(shape=input_shape)
@@ -189,7 +189,6 @@ def bind_model(model):
 
         infer_img_batch = 100
         TTA = 2
-        model.summary()
         intermediate_layer_model = Model(inputs=model.input,outputs=model.layers[-2].output)
         print('inference start')
 
@@ -263,7 +262,7 @@ def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imag
     model.compile(loss='categorical_crossentropy',   optimizer=opt,  metrics=['accuracy'])
     return model
 
-def read_image(img_path,shape=(224,224)):
+def read_image(img_path,shape):
     img = cv2.imread(img_path, 1)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img = cv2.resize(img, shape)
@@ -289,97 +288,35 @@ class DataGenerator(keras.utils.Sequence):
         self.use_aug = use_aug
         self.num_classes = num_classes
         self.shuffle = shuffle
-        self.set_label_imgs()
         self.on_epoch_end()
         self.mean = mean
-        self.img_size = (input_shape[0],input_shape[1])
 
     def __len__(self):
         'Denotes the number of batches per epoch'
         return int(np.ceil(len(self.image_paths) / float(self.batch_size)))
 
-    def get_triple_set(self,index, label):
-        anchor_path = self.image_paths[index]
-        anchor = read_image(anchor_path, self.img_size)
+    def get_triple_set(index, label):
 
-        if len(self.imgs_per_label[label]) == 1:
-            positive_path = self.image_paths[index]
-        else:
-            while 1:
-                ridx = np.random.randint(0,len(self.imgs_per_label[label]))
-                positive_path = self.imgs_per_label[label][ridx]
-                if positive_path !=anchor_path:
-                    break
-
-        positive = read_image(positive_path, self.img_size)
-
-
-        ## negative sel
-        while 1:
-            nega_label = np.random.randint(0,self.num_classes)
-            
-            if nega_label !=label and len(self.imgs_per_label[nega_label]) >=1:
-                break
-
-        nega_img_idx = np.random.randint(0,len(self.imgs_per_label[nega_label]))
-
-        ## debuging
-        #print(nega_label, nega_img_idx, len(self.imgs_per_label[nega_label]))
-        negative_path = self.imgs_per_label[nega_label][nega_img_idx]
-        negative =  read_image(negative_path, self.img_size)
-
-        ## debuging
-        #print(anchor_path, positive_path, negative_path)
-
-        return anchor, positive, negative 
+        return anchor, postive, negative 
 
 
     def __getitem__(self, index):
         'Generate one batch of data'
-        anchors_np=np.zeros((self.batch_size, self.input_shape[0], self.input_shape[1], self.input_shape[2]))
-        poss_np=np.zeros((self.batch_size, self.input_shape[0], self.input_shape[1], self.input_shape[2]))
-        negas_np=np.zeros((self.batch_size, self.input_shape[0], self.input_shape[1], self.input_shape[2]))
-        
+        batch_features = np.zeros((self.batch_size, self.input_shape[0], self.input_shape[1], self.input_shape[2]))
+        features = []
+        batch_labels = np.zeros((self.batch_size, self.num_classes))
         indexes = self.indexes[index*self.batch_size:(index+1)* self.batch_size]
-
-        ancs=[]
-        poss=[]
-        negs=[]
-        for idx in indexes:
-            anc,pos,neg = self.get_triple_set(idx,self.labels[idx])
-            ancs.append(anc)
-            poss.append(pos)
-            negs.append(neg)
- 
-        anchorst = np.array(ancs)
-        posst = np.array(poss)
-        negast =  np.array(negs)
-
-        ## debugging
-        print(anchorst.shape, posst.shape, negast.shape)
-
+        files = self.image_paths[indexes]
+        features = read_image_batch(files, (self.input_shape[0], self.input_shape[1]))
+        features = np.array(features)
         if self.use_aug == True:
-            anchors_np[:,:,:,:]  = self.aug_seq.augment_images(anchorst)
-            poss_np[:,:,:,:]  = self.aug_seq.augment_images(posst)
-            negas_np[:,:,:,:]  = self.aug_seq.augment_images(negast)
+            batch_features[:,:,:,:]  = self.aug_seq.augment_images(features)
         else:
-            anchors_np[:,:,:,:]  = anchorst
-            poss_np[:,:,:,:]  = posst
-            negas_np[:,:,:,:]  = negast
+            batch_features[:,:,:,:]  = features
 
-        anchors_np = normal_inputs(anchors_np,self.mean)
-        poss_np = normal_inputs(poss_np,self.mean)
-        negas_np = normal_inputs(negas_np,self.mean)
-
-        return [anchors_np, poss_np, negas_np], None
-
-    def set_label_imgs(self):
-        self.imgs_per_label = {}
-        for i in range(self.num_classes):
-            self.imgs_per_label.setdefault(i,[])
-
-        for idx, path in enumerate(self.image_paths):
-            self.imgs_per_label[self.labels[idx]].append(path)
+        batch_labels[:,:] =  self.labels[indexes]
+        batch_features = normal_inputs(batch_features,self.mean)
+        return batch_features, batch_labels
 
     def on_epoch_end(self):
         'Updates indexes after each epoch'
@@ -421,7 +358,7 @@ if __name__ == '__main__':
     config = args.parse_args()
 
     NUM_GPU = 1
-    SEL_CONF = 2
+    SEL_CONF = 5
     CV_NUM = 1
 
     CONF_LIST = []
@@ -431,8 +368,8 @@ if __name__ == '__main__':
     CONF_LIST.append({'name':'Re50', 'input_shape':(224, 224, 3), 'backbone':ResNet50
                     , 'batch_size':100 ,'fc_train_batch':260, 'SEED':111,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
-    CONF_LIST.append({'name':'TTM', 'input_shape':(224, 224, 3), 'backbone':DenseNet121
-                    , 'batch_size':30 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
+    CONF_LIST.append({'name':'TTM', 'input_shape':(224, 224, 3), 'backbone':InceptionResNetV2
+                    , 'batch_size':100 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':1, 'fc_train_epoch':1, 'imagenet':None})
     CONF_LIST.append({'name':'IR', 'input_shape':(224, 224, 3), 'backbone':InceptionResNetV2
                     , 'batch_size':100 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
@@ -465,10 +402,20 @@ if __name__ == '__main__':
 
     """ CV Model """
     opt = keras.optimizers.Adam(lr=start_lr)
-
-    model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt)
-    bind_model(model)
-    model.summary()
+    if use_merge_bind == True:
+        feature_models = []
+        for cv in range(CV_NUM):
+            temp_model = build_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt)
+            feature_model = Model(inputs=temp_model.inputs,outputs = temp_model.layers[-2].output)
+            feature_models.append(feature_model)
+        model_input = Input(shape=input_shape)
+        en_model = ensemble_feature_vec(feature_models,model_input, num_classes)
+        bind_model(en_model)
+        en_model.summary()
+    else:
+        model = build_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt)
+        bind_model(model)
+        model.summary()
 
     """ Load data """
     print('dataset path', DATASET_PATH)
@@ -505,60 +452,90 @@ if __name__ == '__main__':
 
         x_train = np.asarray(img_list)
         labels = np.asarray(label_list)
-        #y_train = keras.utils.to_categorical(labels, num_classes=num_classes)
+        y_train = keras.utils.to_categorical(labels, num_classes=num_classes)
 
         print(len(labels), 'train samples')
 
+        best_model_paths = []
+        for cv in range(CV_NUM):
+            cur_seed = SEED + cv
+            opt = keras.optimizers.Adam(lr=start_lr)
+            model = build_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt, NUM_GPU=NUM_GPU)
+            xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
+            print('shape:',xx_train.shape,'val shape:',xx_val.shape)
+            sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+            seq = iaa.Sequential(
+                [
+                    iaa.SomeOf((0, 3),[
+                    iaa.Fliplr(0.5), # horizontally flip 50% of all images
+                    iaa.Flipud(0.2), # vertically flip 20% of all images
+                    sometimes(iaa.CropAndPad(
+                        percent=(-0.05, 0.1),
+                        pad_mode=['reflect']
+                    )),
+                    sometimes( iaa.OneOf([
+                        iaa.Affine(rotate=0),
+                        iaa.Affine(rotate=90),
+                        iaa.Affine(rotate=180),
+                        iaa.Affine(rotate=270)
+                    ])),
+                    sometimes(iaa.Affine(
+                        scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
+                        translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
+                        rotate=(-45, 45), # rotate by -45 to +45 degrees
+                        shear=(-5, 5), 
+                        order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
+                        mode=['reflect'] 
+                    ))
+                    ]),
+                ],
+                random_order=True
+            )
 
-        opt = keras.optimizers.Adam(lr=start_lr)
-        #model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape,opt = opt)
-        #xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
-        xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, labels, test_size=0.15, random_state=SEED,stratify=labels)
+            """ Callback """
+            monitor = 'val_acc'
+            reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=4,factor=0.2,verbose=1)
+            early_stop = EarlyStopping(monitor=monitor, patience=7)
+            best_model_path = './best_model' + str(cur_seed) + '.h5'
+            best_model_paths.append(best_model_path)
+            checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
+            report = report_nsml(prefix = prefix,seed = cur_seed)
+            callbacks = [reduce_lr,early_stop,checkpoint,report]
 
-        print('shape:',xx_train.shape,'val shape:',xx_val.shape)
-        sometimes = lambda aug: iaa.Sometimes(0.5, aug)
-        seq = iaa.Sequential(
-            [
-                iaa.SomeOf((0, 3),[
-                iaa.Fliplr(0.5), # horizontally flip 50% of all images
-                iaa.Flipud(0.2), # vertically flip 20% of all images
-                sometimes(iaa.CropAndPad(
-                    percent=(-0.05, 0.1),
-                    pad_mode=['reflect']
-                )),
-                sometimes( iaa.OneOf([
-                    iaa.Affine(rotate=0),
-                    iaa.Affine(rotate=90),
-                    iaa.Affine(rotate=180),
-                    iaa.Affine(rotate=270)
-                ])),
-                sometimes(iaa.Affine(
-                    scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
-                    translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
-                    rotate=(-45, 45), # rotate by -45 to +45 degrees
-                    shear=(-5, 5), 
-                    order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
-                    mode=['reflect'] 
-                ))
-                ]),
-            ],
-            random_order=True
-        )
+            train_gen = DataGenerator(xx_train,input_shape, yy_train,fc_train_batch,seq,num_classes,use_aug=True,mean = mean_arr)
+            val_gen = DataGenerator(xx_val,input_shape, yy_val,fc_train_batch,seq,num_classes,use_aug=False,shuffle=False, mean = mean_arr)
+            nsml.save(prefix+'PRE' + str(cv))
+            hist1 = model.fit_generator(train_gen, validation_data=val_gen, workers=4, use_multiprocessing=True
+                    ,  epochs=fc_train_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
 
-        """ Callback """
-        monitor = 'val_loss'
-        reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=4,factor=0.2,verbose=1)
-        early_stop = EarlyStopping(monitor=monitor, patience=7)
-        best_model_path = './best_model' + str(SEED) + '.h5'
-        checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
-        report = report_nsml(prefix = prefix,seed = SEED)
-        callbacks = [reduce_lr,early_stop,checkpoint,report]
-               
-        train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,mean = mean_arr)
-        val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False, mean = mean_arr)
-        hist = model.fit_generator(train_gen ,validation_data= val_gen, workers=1, use_multiprocessing=False
-                    ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
 
-        model.load_weights(best_model_path)
-        nsml.report(summary=True)
-        nsml.save(prefix +'BST')
+            for layer in model.layers:
+                layer.trainable=True
+            model.compile(loss='categorical_crossentropy',  optimizer=opt,  metrics=['accuracy']) 
+        
+            model.load_weights(best_model_path)
+            print('load model:' ,best_model_path)
+
+            train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,mean = mean_arr)
+            val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False, mean = mean_arr)
+            hist2 = model.fit_generator(train_gen ,validation_data= val_gen, workers=4, use_multiprocessing=True
+                     ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
+
+            model.load_weights(best_model_path)
+            nsml.save(prefix + str(cv))
+
+        if use_merge_bind == True:
+            print('all cv model train complete, now cv model saving start')
+            feature_models = []
+            for bp in best_model_paths:
+                temp_model = load_model(bp)
+                feature_model = Model(inputs=temp_model.inputs,outputs = temp_model.layers[-2].output)
+                feature_models.append(feature_model)
+
+            model_input = Input(shape=input_shape)
+            en_model = ensemble_feature_vec(feature_models,model_input, num_classes)
+            en_model.save('./ensemble.h5')
+            print('save model:',prefix +'Merge' + str(CV_NUM))
+            nsml.report(summary=True)
+            nsml.save(prefix +'Merge' + str(CV_NUM))
+            #why.. low score 0.013....2cv
