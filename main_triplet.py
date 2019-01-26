@@ -172,25 +172,26 @@ def bind_model(model):
         db = [v.split('/')[-1].split('.')[0] for v in db]
         queries.sort()
         db.sort()
+        print('infer start qeries length:',len(queries),'db length:',len(db))
 
         queries, query_vecs, references, reference_vecs = get_feature(model, queries, db)
-        print(query_vecs.shape, reference_vecs.shape)
-        # l2 normalization
+        print('feature shape:',query_vecs.shape, reference_vecs.shape)
+        ## l2 normalization
         query_vecs = l2_normalize(query_vecs)
         reference_vecs = l2_normalize(reference_vecs)
         print('l2 complete')
         # Calculate cosine similarity
         sim_matrix = np.dot(query_vecs, reference_vecs.T)
-        print(sim_matrix.shape)
+        print('cal_dot_complete sim matrix shape : ',sim_matrix.shape)
         indices = np.argsort(sim_matrix, axis=1)
         indices = np.flip(indices, axis=1)
-        print(indices.shape)
+        print('indices shape:',indices.shape)
         retrieval_results = {}
-        print(len(queries),len(references))
+        print('queries length:',len(queries),'references length',len(references))
         for (i, query) in enumerate(queries):
-            print(indices[i].shape)
+            # print(indices[i].shape)
             ranked_list = [references[k] for k in indices[i]]
-            print(i, query, ranked_list)
+            # print(i, query, ranked_list)
             ranked_list = ranked_list[:1000]
 
             retrieval_results[query] = ranked_list
@@ -205,43 +206,36 @@ def bind_model(model):
 # data preprocess
 def get_feature(model, queries, db):
     img_size = (224, 224)
+    batch_size = 200
     test_path = DATASET_PATH + '/test/test_data'
-    
-    intermediate_layer_model = Model(inputs=model.input[0], outputs=model.get_layer('triplet_loss_layer').input[0])
+
+    q_files = []
+    ref_files = []
+    for q in queries:
+        q_files.append(q+'.jpg')
+    for ref in db:
+        ref_files.append(ref+'.jpg')
+
+    query_df = pd.DataFrame({'file_name':q_files})
+    ref_df = pd.DataFrame({'file_name':ref_files})
+    print('q_df shape:',query_df.shape, 'ref_df shape:',ref_df.shape)
     test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32')
-    query_generator = test_datagen.flow_from_directory(
-        directory=test_path,
-        target_size=(224, 224),
-        classes=['query'],
-        color_mode="rgb",
-        batch_size=32,
-        class_mode=None,
-        shuffle=False
-    )
+
+    query_generator=test_datagen.flow_from_dataframe(dataframe=query_df, directory=test_path+'/query/', x_col="file_name"
+                                                , y_col=None, class_mode=None, target_size=img_size, color_mode="rgb",batch_size=batch_size,shuffle=False)
+
+    reference_generator=test_datagen.flow_from_dataframe(dataframe=ref_df, directory=test_path+'/reference/', x_col="file_name"
+                                                , y_col=None, class_mode=None, target_size=img_size, color_mode="rgb",batch_size=batch_size,shuffle=False)
+
+    intermediate_layer_model = Model(inputs=model.input[0], outputs=model.get_layer('triplet_loss_layer').input[0])
+    intermediate_layer_model.summary()
+    print('quer_gen length:',len(query_generator), 'refer_gen length:',len(reference_generator))
     query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator), verbose=1)
-
-    reference_generator = test_datagen.flow_from_directory(
-        directory=test_path,
-        target_size=(224, 224),
-        classes=['reference'],
-        color_mode="rgb",
-        batch_size=32,
-        class_mode=None,
-        shuffle=False
-    )
-    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),
-                                                                verbose=1)
-
+    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),verbose=1)
     ## debuging
-    print (type(query_generator.filenames),query_generator.filenames[:10])
-    print (type(queries),queries[:10])
-    print (reference_generator.filenames[:10])
-    print (db[:10])
-
-
-    query_ret = [v.split('/')[-1].split('.')[0] for v in query_generator.filenames]
-    ref_ret = [v.split('/')[-1].split('.')[0] for v in reference_generator.filenames]
-    return query_ret, query_vecs, query_ret, reference_vecs
+    #print (type(query_ret),query_ret[:10])
+    #print (type(queries),queries[:10])
+    return queries, query_vecs, db, reference_vecs
 
 # data preprocess
 def preprocess(queries, db):
