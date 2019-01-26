@@ -41,6 +41,9 @@ import imgaug as ia
 from imgaug import augmenters as iaa
 import random
 from keras.utils.training_utils import multi_gpu_model
+from keras.preprocessing.image import ImageDataGenerator
+import pandas as pd
+
 
 class TripletLossLayer(Layer):
 	def __init__(self, alpha, **kwargs):
@@ -75,9 +78,9 @@ def build_triple_base_model(backbone= None, input_shape =  (224,224,3), use_imag
 
 def build_triple_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, opt = SGD()):
     bs_model=build_triple_base_model(backbone= backbone, input_shape =  (224,224,3), use_imagenet =use_imagenet)
-    input_a=Input(shape=input_shape)
-    input_p=Input(shape=input_shape)
-    input_n=Input(shape=input_shape)
+    input_a=Input(shape=input_shape, name ='input_anchor')
+    input_p=Input(shape=input_shape, name ='input_pos')
+    input_n=Input(shape=input_shape, name ='input_neg')
     embedding_a=bs_model(input_a)
     embedding_p=bs_model(input_p)
     embedding_n=bs_model(input_n)
@@ -86,8 +89,6 @@ def build_triple_model(backbone= None, input_shape =  (224,224,3), use_imagenet 
     model=Model([input_a,input_p,input_n],triplet_loss_layer)
     model.compile(optimizer=opt,loss=None)
     return model
-
-
 
 def get_tta_image(image, tta):
     images=[]
@@ -144,83 +145,52 @@ def normal_inputs(imgs, mean_arr=None):
     else:
         return normal_input(imgs,mean_arr)
 
+def l2_normalize(v):
+    norm = np.linalg.norm(v)
+    if norm == 0:
+        return v
+    return v / norm
+
 def normal_input(img, mean_arr=None):
     img = img.astype('float32')
     img /= 255
     #img -= mean_arr
     return img
- 
+
 def bind_model(model):
     def save(dir_name):
         os.makedirs(dir_name, exist_ok=True)
         model.save_weights(os.path.join(dir_name, 'model'))
-        print('model saved!', os.path.join(dir_name, 'model'))
+        print('model saved!')
 
     def load(file_path):
         model.load_weights(file_path)
-        print('model loaded!', file_path)
+        print('model loaded!')
 
     def infer(queries, db):
+        queries = [v.split('/')[-1].split('.')[0] for v in queries]
+        db = [v.split('/')[-1].split('.')[0] for v in db]
+        queries.sort()
+        db.sort()
 
-        # Query 개수: 195 ->9,014->18,027
-        # Reference(DB) 개수: 1,127->36,748
-        # Total (query + reference): 1,322
-
-        queries, query_img, references, reference_img = preprocess(queries, db)
-
-        # debuging all set size
-        # queries = query_img*901
-        # references = references*3674
-        # query_img = query_img*901
-        # reference_img = reference_img*3674
-
-        print('test data load queries {} query_img {} references {} reference_img {}'.
-              format(len(queries), len(query_img), len(references), len(reference_img)))
-
-        #queries = np.asarray(queries)
-        #query_img = np.asarray(query_img)
-        #references = np.asarray(references)
-        #reference_img = np.asarray(reference_img)
-        #mean_arr = np.load('./mean.npy')
-        query_img = normal_inputs(query_img)
-        reference_img = normal_inputs(reference_img)
-
-
-
-        infer_img_batch = 100
-        TTA = 2
-        model.summary()
-        intermediate_layer_model = Model(inputs=model.input,outputs=model.layers[-2].output)
-        print('inference start')
-
-        # inference
-        query_veclist=[]
-        query_veclist = predict_tta_batch(intermediate_layer_model,query_img,tta=TTA,batch_size=infer_img_batch,use_avg=False)
-        query_vecs = np.array(query_veclist)
-        print('query_vecs shape:',query_vecs.shape)
-        reference_veclist=[]
-        if isinstance(reference_img, (list,)):
-            print('reference',len(reference_img))
-        else:
-            print('reference',reference_img.shape)
-        reference_veclist = predict_tta_batch(intermediate_layer_model,reference_img,tta=TTA,batch_size=infer_img_batch,use_avg=False)
-        reference_vecs = np.array(reference_veclist)
-        print('reference_vecs shape:',reference_vecs.shape)
-
+        queries, query_vecs, references, reference_vecs = get_feature(model, queries, db)
+        print(query_vecs.shape, reference_vecs.shape)
         # l2 normalization
         query_vecs = l2_normalize(query_vecs)
         reference_vecs = l2_normalize(reference_vecs)
-
-        print(query_vecs.shape, reference_vecs.shape)
+        print('l2 complete')
         # Calculate cosine similarity
         sim_matrix = np.dot(query_vecs, reference_vecs.T)
+        print(sim_matrix.shape)
         indices = np.argsort(sim_matrix, axis=1)
         indices = np.flip(indices, axis=1)
-
+        print(indices.shape)
         retrieval_results = {}
+        print(len(queries),len(references))
         for (i, query) in enumerate(queries):
-            query = query.split('/')[-1].split('.')[0]
-            ranked_list = [references[k].split('/')[-1].split('.')[0] for k in indices[i]]
+            print(indices[i].shape)
+            ranked_list = [references[k] for k in indices[i]]
+            print(i, query, ranked_list)
             ranked_list = ranked_list[:1000]
 
             retrieval_results[query] = ranked_list
@@ -232,11 +202,46 @@ def bind_model(model):
     nsml.bind(save=save, load=load, infer=infer)
 
 
-def l2_normalize(v):
-    norm = np.linalg.norm(v)
-    if norm == 0:
-        return v
-    return v / norm
+# data preprocess
+def get_feature(model, queries, db):
+    img_size = (224, 224)
+    test_path = DATASET_PATH + '/test/test_data'
+    
+    intermediate_layer_model = Model(inputs=model.input[0], outputs=model.get_layer('triplet_loss_layer').input[0])
+    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32')
+    query_generator = test_datagen.flow_from_directory(
+        directory=test_path,
+        target_size=(224, 224),
+        classes=['query'],
+        color_mode="rgb",
+        batch_size=32,
+        class_mode=None,
+        shuffle=False
+    )
+    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator), verbose=1)
+
+    reference_generator = test_datagen.flow_from_directory(
+        directory=test_path,
+        target_size=(224, 224),
+        classes=['reference'],
+        color_mode="rgb",
+        batch_size=32,
+        class_mode=None,
+        shuffle=False
+    )
+    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),
+                                                                verbose=1)
+
+    ## debuging
+    print (type(query_generator.filenames),query_generator.filenames[:10])
+    print (type(queries),queries[:10])
+    print (reference_generator.filenames[:10])
+    print (db[:10])
+
+
+    query_ret = [v.split('/')[-1].split('.')[0] for v in query_generator.filenames]
+    ref_ret = [v.split('/')[-1].split('.')[0] for v in reference_generator.filenames]
+    return query_ret, query_vecs, query_ret, reference_vecs
 
 # data preprocess
 def preprocess(queries, db):
@@ -356,7 +361,7 @@ class DataGenerator(keras.utils.Sequence):
         negast =  np.array(negs)
 
         ## debugging
-        print(anchorst.shape, posst.shape, negast.shape)
+        ## print(anchorst.shape, posst.shape, negast.shape)
 
         if self.use_aug == True:
             anchors_np[:,:,:,:]  = self.aug_seq.augment_images(anchorst)
@@ -403,7 +408,7 @@ class report_nsml(keras.callbacks.Callback):
         self.prefix = prefix
         self.seed = seed
     def on_epoch_end(self, epoch, logs={}):
-        nsml.report(summary=True, epoch=epoch, loss=logs.get('loss'), acc=logs.get('acc'), val_loss=logs.get('val_loss'), val_acc=logs.get('val_acc'))
+        nsml.report(summary=True, epoch=epoch, loss=logs.get('loss'), val_loss=logs.get('val_loss'))
         #nsml.save(self.prefix +'_'+ str(self.seed)+'_' +str(epoch))
 
 if __name__ == '__main__':
@@ -421,7 +426,7 @@ if __name__ == '__main__':
     config = args.parse_args()
 
     NUM_GPU = 1
-    SEL_CONF = 2
+    SEL_CONF = 5
     CV_NUM = 1
 
     CONF_LIST = []
@@ -441,11 +446,14 @@ if __name__ == '__main__':
                     , 'batch_size':48 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
     CONF_LIST.append({'name':'De121', 'input_shape':(224, 224, 3), 'backbone':DenseNet121
-                    , 'batch_size':256 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':20, 'fc_train_epoch':2, 'imagenet':'imagenet'})
+                    , 'batch_size':30 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.0005
+                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':1, 'fc_train_epoch':2, 'imagenet':'imagenet'})
     CONF_LIST.append({'name':'De201', 'input_shape':(224, 224, 3), 'backbone':DenseNet201
                     , 'batch_size':100 ,'fc_train_batch':260, 'SEED':111,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
+    CONF_LIST.append({'name':'MO2', 'input_shape':(224, 224, 3), 'backbone':MobileNetV2
+                    , 'batch_size':60 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.0005
+                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':1, 'fc_train_epoch':2, 'imagenet':'imagenet'})
 
     # training parameters
     use_merge_bind = False
@@ -466,7 +474,7 @@ if __name__ == '__main__':
     """ CV Model """
     opt = keras.optimizers.Adam(lr=start_lr)
 
-    model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt)
+    model = build_triple_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes,opt = opt)
     bind_model(model)
     model.summary()
 
@@ -502,63 +510,70 @@ if __name__ == '__main__':
     bTrainmode = False
     if config.mode == 'train':
         bTrainmode = True
-
-        x_train = np.asarray(img_list)
-        labels = np.asarray(label_list)
-        #y_train = keras.utils.to_categorical(labels, num_classes=num_classes)
-
-        print(len(labels), 'train samples')
+        #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
+        nsml.load(checkpoint='De121BST', session='Zonber/ir_ph2/60') #InceptionResnetV2 222
+        nsml.save('De121BST')  # this is display model name at lb
 
 
-        opt = keras.optimizers.Adam(lr=start_lr)
-        #model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape,opt = opt)
-        #xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
-        xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, labels, test_size=0.15, random_state=SEED,stratify=labels)
+    #if config.mode == 'train':
+    #    bTrainmode = True
 
-        print('shape:',xx_train.shape,'val shape:',xx_val.shape)
-        sometimes = lambda aug: iaa.Sometimes(0.5, aug)
-        seq = iaa.Sequential(
-            [
-                iaa.SomeOf((0, 3),[
-                iaa.Fliplr(0.5), # horizontally flip 50% of all images
-                iaa.Flipud(0.2), # vertically flip 20% of all images
-                sometimes(iaa.CropAndPad(
-                    percent=(-0.05, 0.1),
-                    pad_mode=['reflect']
-                )),
-                sometimes( iaa.OneOf([
-                    iaa.Affine(rotate=0),
-                    iaa.Affine(rotate=90),
-                    iaa.Affine(rotate=180),
-                    iaa.Affine(rotate=270)
-                ])),
-                sometimes(iaa.Affine(
-                    scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
-                    translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
-                    rotate=(-45, 45), # rotate by -45 to +45 degrees
-                    shear=(-5, 5), 
-                    order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
-                    mode=['reflect'] 
-                ))
-                ]),
-            ],
-            random_order=True
-        )
+    #    x_train = np.asarray(img_list)
+    #    labels = np.asarray(label_list)
+    #    #y_train = keras.utils.to_categorical(labels, num_classes=num_classes)
 
-        """ Callback """
-        monitor = 'val_loss'
-        reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=4,factor=0.2,verbose=1)
-        early_stop = EarlyStopping(monitor=monitor, patience=7)
-        best_model_path = './best_model' + str(SEED) + '.h5'
-        checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
-        report = report_nsml(prefix = prefix,seed = SEED)
-        callbacks = [reduce_lr,early_stop,checkpoint,report]
+    #    print(len(labels), 'train samples')
+
+
+    #    opt = keras.optimizers.Adam(lr=start_lr)
+    #    #model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape,opt = opt)
+    #    #xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
+    #    xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, labels, test_size=0.15, random_state=SEED,stratify=labels)
+
+    #    print('shape:',xx_train.shape,'val shape:',xx_val.shape)
+    #    sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+    #    seq = iaa.Sequential(
+    #        [
+    #            iaa.SomeOf((0, 3),[
+    #            iaa.Fliplr(0.5), # horizontally flip 50% of all images
+    #            iaa.Flipud(0.2), # vertically flip 20% of all images
+    #            sometimes(iaa.CropAndPad(
+    #                percent=(-0.05, 0.1),
+    #                pad_mode=['reflect']
+    #            )),
+    #            sometimes( iaa.OneOf([
+    #                iaa.Affine(rotate=0),
+    #                iaa.Affine(rotate=90),
+    #                iaa.Affine(rotate=180),
+    #                iaa.Affine(rotate=270)
+    #            ])),
+    #            sometimes(iaa.Affine(
+    #                scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
+    #                translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
+    #                rotate=(-45, 45), # rotate by -45 to +45 degrees
+    #                shear=(-5, 5), 
+    #                order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
+    #                mode=['reflect'] 
+    #            ))
+    #            ]),
+    #        ],
+    #        random_order=True
+    #    )
+
+    #    """ Callback """
+    #    monitor = 'val_loss'
+    #    reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=4,factor=0.2,verbose=1)
+    #    early_stop = EarlyStopping(monitor=monitor, patience=7)
+    #    best_model_path = './best_model' + str(SEED) + '.h5'
+    #    checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
+    #    report = report_nsml(prefix = prefix,seed = SEED)
+    #    callbacks = [reduce_lr,early_stop,checkpoint,report]
                
-        train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,mean = mean_arr)
-        val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False, mean = mean_arr)
-        hist = model.fit_generator(train_gen ,validation_data= val_gen, workers=1, use_multiprocessing=False
-                    ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
+    #    train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,mean = mean_arr)
+    #    val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False, mean = mean_arr)
+    #    hist = model.fit_generator(train_gen ,validation_data= val_gen, workers=1, use_multiprocessing=False
+    #                ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
 
-        model.load_weights(best_model_path)
-        nsml.report(summary=True)
-        nsml.save(prefix +'BST')
+    #    model.load_weights(best_model_path)
+    #    nsml.report(summary=True)
+    #    nsml.save(prefix +'BST')

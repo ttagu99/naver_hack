@@ -9,6 +9,7 @@ setup(
     install_requires=[
         'scikit-learn',
         'imgaug',
-        'scikit-cuda'
+        'image-classifiers',
+        'pandas'
     ]
 )

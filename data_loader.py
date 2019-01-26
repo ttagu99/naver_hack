@@ -35,6 +35,7 @@ def train_data_loader(data_path, img_size, output_path):
         pickle.dump(label_list, label_f)
 
 
+
 # nsml test_data_loader
 def test_data_loader(data_path):
     data_path = os.path.join(data_path, 'test', 'test_data')
