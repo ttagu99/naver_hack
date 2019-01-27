@@ -31,11 +31,12 @@ from keras.applications.resnet50 import ResNet50
 from keras.applications.nasnet import NASNetLarge
 from keras.applications.mobilenetv2 import MobileNetV2
 from keras.applications.inception_resnet_v2 import InceptionResNetV2
-from classification_models.resnet import ResNet18
+from classification_models.resnet import ResNet18, SEResNet18
+from classification_models.senet import SEResNeXt50
 from keras.models import Model,load_model
 from keras.optimizers import Adam, SGD
 from keras import Model, Input
-from keras.layers import Layer
+from keras.layers import Layer, multiply
 
 from sklearn.model_selection import train_test_split
 import imgaug as ia
@@ -44,40 +45,39 @@ import random
 from keras.utils.training_utils import multi_gpu_model
 from keras.preprocessing.image import ImageDataGenerator
 import pandas as pd
-
-def cos_distance(y_true, y_pred):
-    y_true = K.l2_normalize(y_true, axis=-1)
-    y_pred = K.l2_normalize(y_pred, axis=-1)
-    return 1 - K.sum((y_true * y_pred), axis=-1)#K.mean((1 - K.sum((y_true * y_pred), axis=-1)))#1 - K.sum((y_true * y_pred), axis=-1)
-
 class TripletLossLayer(Layer):
-	def __init__(self, alpha, **kwargs):
-		self.alpha = alpha
+	def __init__(self, pos_r, neg_r, **kwargs):
+#		self.alpha = alpha
+		self.neg_r = neg_r
+		self.pos_r = pos_r
 		super(TripletLossLayer, self).__init__(**kwargs)
+
+	#def cos_similarity(self, y_true, y_pred):
+	#	y_true = K.l2_normalize(y_true, axis=-1)
+	#	y_pred = K.l2_normalize(y_pred, axis=-1)
+	#	return K.sum(y_true * y_pred, axis=-1)
+
+	def cos_similarity(self, y_true, y_pred):
+		y_true = K.l2_normalize(y_true, axis=-1)
+		y_pred = K.l2_normalize(y_pred, axis=-1)
+		return K.mean(K.sum(multiply([y_true,y_pred]), axis=1))
 
 	def triplet_loss(self, inputs):
 		a, p, n = inputs
-		p_dist = cos_distance(a,p)#K.sum(K.square(a - p), axis=-1)
-		n_dist = cos_distance(a,n)#K.sum(K.square(a - n), axis=-1)
-		return K.mean(K.maximum(p_dist - n_dist + self.alpha, 0), axis=0)#K.maximum(p_dist - n_dist + self.alpha, 0)#K.sum(K.maximum(p_dist - n_dist + self.alpha, 0), axis=0)
+		p_dist = self.cos_similarity(a,p)
+		n_dist = self.cos_similarity(a,n)
+		return p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
 
 	def call(self, inputs):
 		loss = self.triplet_loss(inputs)
 		self.add_loss(loss)
 		return loss
 
-def triplet_loss(y_true,y_pred):
-	a,p,n=y_pred[0],y_pred[1],y_pred[2]
-	p_dist = cos_distance(a,p)#K.sum(K.square(a - p), axis=-1)
-	n_dist = cos_distance(a,n)#K.sum(K.square(a - n), axis=-1)
-	base_dist=p_dist-n_dist+alpha
-	loss=K.sum(K.maximum(base_dist,0))
-	return loss
-
 def build_triple_base_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet'):
     base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
     x = base_model.output
     x = GlobalAveragePooling2D()(x)
+    #x = Dense(256, activation='relu')(x)
     model = Model(inputs=base_model.input, outputs=x)
     return model
 
@@ -90,7 +90,7 @@ def build_triple_model(backbone= None, input_shape =  (224,224,3), use_imagenet 
     embedding_p=bs_model(input_p)
     embedding_n=bs_model(input_n)
 
-    triplet_loss_layer = TripletLossLayer(alpha=0.2, name='triplet_loss_layer')([embedding_a, embedding_p, embedding_n])
+    triplet_loss_layer = TripletLossLayer(pos_r=1.0, neg_r=3.0, name='triplet_loss_layer')([embedding_a, embedding_p, embedding_n])
     model=Model([input_a,input_p,input_n],triplet_loss_layer)
     model.compile(optimizer=opt,loss=None)
     return model
@@ -428,7 +428,7 @@ if __name__ == '__main__':
     config = args.parse_args()
 
     NUM_GPU = 1
-    SEL_CONF = 8
+    SEL_CONF = 9
     CV_NUM = 1
 
     CONF_LIST = []
@@ -442,8 +442,8 @@ if __name__ == '__main__':
                     , 'batch_size':30 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':1, 'fc_train_epoch':1, 'imagenet':None})
     CONF_LIST.append({'name':'IR', 'input_shape':(224, 224, 3), 'backbone':InceptionResNetV2
-                    , 'batch_size':100 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
+                    , 'batch_size':30 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
+                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':20, 'fc_train_epoch':10, 'imagenet':'imagenet'})
     CONF_LIST.append({'name':'NL', 'input_shape':(224, 224, 3), 'backbone':NASNetLarge
                     , 'batch_size':48 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
@@ -457,8 +457,14 @@ if __name__ == '__main__':
                     , 'batch_size':80 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':10, 'fc_train_epoch':2, 'imagenet':'imagenet'})
     CONF_LIST.append({'name':'RES18', 'input_shape':(224, 224, 3), 'backbone':ResNet18
-                    , 'batch_size':80 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.0005
+                    , 'batch_size':80 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.00005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':10, 'fc_train_epoch':2, 'imagenet':'imagenet'})
+    CONF_LIST.append({'name':'SERES18', 'input_shape':(224, 224, 3), 'backbone':SEResNet18
+                    , 'batch_size':80 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.0005
+                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':40, 'fc_train_epoch':2, 'imagenet':'imagenet'})
+    CONF_LIST.append({'name':'SEResNeXt50', 'input_shape':(224, 224, 3), 'backbone':SEResNeXt50
+                , 'batch_size':30 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.00005
+                , 'finetune_layer':70, 'fine_batchmul':15,'epoch':40, 'fc_train_epoch':2, 'imagenet':'imagenet'})
 
     # training parameters
     use_merge_bind = False
@@ -479,7 +485,7 @@ if __name__ == '__main__':
     """ CV Model """
     opt = keras.optimizers.Adam(lr=start_lr)
 
-    model = build_triple_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes,opt = opt)
+    model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt)
     bind_model(model)
     model.summary()
 
@@ -567,7 +573,7 @@ if __name__ == '__main__':
 
         """ Callback """
         monitor = 'val_loss'
-        reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=4,factor=0.2,verbose=1)
+        reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=3,factor=0.2,verbose=1)
         early_stop = EarlyStopping(monitor=monitor, patience=6)
         best_model_path = './best_model' + str(SEED) + '.h5'
         checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
