@@ -26,6 +26,7 @@
     <Compile Include="backends.py" />
     <Compile Include="data_loader.py" />
     <Compile Include="frontends.py" />
+    <Compile Include="main.py" />
     <Compile Include="main_cls.py" />
     <Compile Include="main_secls.py" />
     <Compile Include="no_train_infer.py" />

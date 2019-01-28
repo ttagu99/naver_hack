@@ -38,7 +38,7 @@ import imgaug as ia
 from imgaug import augmenters as iaa
 import random
 from keras.utils.training_utils import multi_gpu_model
-from keras.preprocessing.image import ImageDataGenerator
+
 
 
 def get_tta_image(image, tta):
@@ -102,42 +102,76 @@ def normal_input(img, mean_arr=None):
     #img -= mean_arr
     return img
  
-
 def bind_model(model):
     def save(dir_name):
         os.makedirs(dir_name, exist_ok=True)
         model.save_weights(os.path.join(dir_name, 'model'))
-        print('model saved!')
+        print('model saved!', os.path.join(dir_name, 'model'))
 
     def load(file_path):
         model.load_weights(file_path)
-        print('model loaded!')
+        print('model loaded!', file_path)
 
-    def infer(queries, _):
-        test_path = DATASET_PATH + '/test/test_data'
+    def infer(queries, db):
 
-        db = [os.path.join(test_path, 'reference', path) for path in os.listdir(os.path.join(test_path, 'reference'))]
+        # Query 개수: 195 ->9,014->18,027
+        # Reference(DB) 개수: 1,127->36,748
+        # Total (query + reference): 1,322
 
-        queries = [v.split('/')[-1].split('.')[0] for v in queries]
-        db = [v.split('/')[-1].split('.')[0] for v in db]
-        queries.sort()
-        db.sort()
+        queries, query_img, references, reference_img = preprocess(queries, db)
 
-        queries, query_vecs, references, reference_vecs = get_feature(model, queries, db)
+        # debuging all set size
+        # queries = query_img*901
+        # references = references*3674
+        # query_img = query_img*901
+        # reference_img = reference_img*3674
+
+        print('test data load queries {} query_img {} references {} reference_img {}'.
+              format(len(queries), len(query_img), len(references), len(reference_img)))
+
+        #queries = np.asarray(queries)
+        #query_img = np.asarray(query_img)
+        #references = np.asarray(references)
+        #reference_img = np.asarray(reference_img)
+        #mean_arr = np.load('./mean.npy')
+        query_img = normal_inputs(query_img)
+        reference_img = normal_inputs(reference_img)
+
+
+
+        infer_img_batch = 100
+        TTA = 2
+        intermediate_layer_model = Model(inputs=model.input,outputs=model.layers[-2].output)
+        print('inference start')
+
+        # inference
+        query_veclist=[]
+        query_veclist = predict_tta_batch(intermediate_layer_model,query_img,tta=TTA,batch_size=infer_img_batch,use_avg=False)
+        query_vecs = np.array(query_veclist)
+        print('query_vecs shape:',query_vecs.shape)
+        reference_veclist=[]
+        if isinstance(reference_img, (list,)):
+            print('reference',len(reference_img))
+        else:
+            print('reference',reference_img.shape)
+        reference_veclist = predict_tta_batch(intermediate_layer_model,reference_img,tta=TTA,batch_size=infer_img_batch,use_avg=False)
+        reference_vecs = np.array(reference_veclist)
+        print('reference_vecs shape:',reference_vecs.shape)
 
         # l2 normalization
         query_vecs = l2_normalize(query_vecs)
         reference_vecs = l2_normalize(reference_vecs)
 
+        print(query_vecs.shape, reference_vecs.shape)
         # Calculate cosine similarity
         sim_matrix = np.dot(query_vecs, reference_vecs.T)
         indices = np.argsort(sim_matrix, axis=1)
         indices = np.flip(indices, axis=1)
 
         retrieval_results = {}
-
         for (i, query) in enumerate(queries):
-            ranked_list = [references[k] for k in indices[i]]
+            query = query.split('/')[-1].split('.')[0]
+            ranked_list = [references[k].split('/')[-1].split('.')[0] for k in indices[i]]
             ranked_list = ranked_list[:1000]
 
             retrieval_results[query] = ranked_list
@@ -154,41 +188,6 @@ def l2_normalize(v):
     if norm == 0:
         return v
     return v / norm
-
-
-# data preprocess
-def get_feature(model, queries, db):
-    img_size = (224, 224)
-    batch_size = 100
-    test_path = DATASET_PATH + '/test/test_data'
-
-    intermediate_layer_model = Model(inputs=model.input, outputs=model.layers[-2].output)
-    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32')
-    query_generator = test_datagen.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['query'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )
-    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator), verbose=1)
-
-    reference_generator = test_datagen.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['reference'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )
-    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),
-                                                                verbose=1)
-
-    return queries, query_vecs, db, reference_vecs
-
 
 # data preprocess
 def preprocess(queries, db):
@@ -305,8 +304,8 @@ if __name__ == '__main__':
     config = args.parse_args()
 
     NUM_GPU = 1
-    SEL_CONF = 2
-    CV_NUM = 5
+    SEL_CONF = 5
+    CV_NUM = 1
 
     CONF_LIST = []
     CONF_LIST.append({'name':'Xc', 'input_shape':(224, 224, 3), 'backbone':Xception
@@ -325,8 +324,8 @@ if __name__ == '__main__':
                     , 'batch_size':48 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
     CONF_LIST.append({'name':'De121', 'input_shape':(224, 224, 3), 'backbone':DenseNet121
-                    , 'batch_size':100 ,'fc_train_batch':260, 'SEED':111,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
+                    , 'batch_size':256 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.0005
+                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':20, 'fc_train_epoch':2, 'imagenet':'imagenet'})
     CONF_LIST.append({'name':'De201', 'input_shape':(224, 224, 3), 'backbone':DenseNet201
                     , 'batch_size':100 ,'fc_train_batch':260, 'SEED':111,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
@@ -396,6 +395,93 @@ if __name__ == '__main__':
     bTrainmode = False
     if config.mode == 'train':
         bTrainmode = True
-        #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
-        nsml.load(checkpoint='IR0', session='Zonber/ir_ph2/8') #InceptionResnetV2 222
-        nsml.save(0)  # this is display model name at lb
+
+        x_train = np.asarray(img_list)
+        labels = np.asarray(label_list)
+        y_train = keras.utils.to_categorical(labels, num_classes=num_classes)
+
+        print(len(labels), 'train samples')
+
+        best_model_paths = []
+        for cv in range(CV_NUM):
+            cur_seed = SEED + cv
+            opt = keras.optimizers.Adam(lr=start_lr)
+            model = build_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt, NUM_GPU=NUM_GPU)
+            xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
+            print('shape:',xx_train.shape,'val shape:',xx_val.shape)
+            sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+            seq = iaa.Sequential(
+                [
+                    iaa.SomeOf((0, 3),[
+                    iaa.Fliplr(0.5), # horizontally flip 50% of all images
+                    iaa.Flipud(0.2), # vertically flip 20% of all images
+                    sometimes(iaa.CropAndPad(
+                        percent=(-0.05, 0.1),
+                        pad_mode=['reflect']
+                    )),
+                    sometimes( iaa.OneOf([
+                        iaa.Affine(rotate=0),
+                        iaa.Affine(rotate=90),
+                        iaa.Affine(rotate=180),
+                        iaa.Affine(rotate=270)
+                    ])),
+                    sometimes(iaa.Affine(
+                        scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
+                        translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
+                        rotate=(-45, 45), # rotate by -45 to +45 degrees
+                        shear=(-5, 5), 
+                        order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
+                        mode=['reflect'] 
+                    ))
+                    ]),
+                ],
+                random_order=True
+            )
+
+            """ Callback """
+            monitor = 'val_acc'
+            reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=4,factor=0.2,verbose=1)
+            early_stop = EarlyStopping(monitor=monitor, patience=7)
+            best_model_path = './best_model' + str(cur_seed) + '.h5'
+            best_model_paths.append(best_model_path)
+            checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
+            report = report_nsml(prefix = prefix,seed = cur_seed)
+            callbacks = [reduce_lr,early_stop,checkpoint,report]
+
+            train_gen = DataGenerator(xx_train,input_shape, yy_train,fc_train_batch,seq,num_classes,use_aug=True,mean = mean_arr)
+            val_gen = DataGenerator(xx_val,input_shape, yy_val,fc_train_batch,seq,num_classes,use_aug=False,shuffle=False, mean = mean_arr)
+            nsml.save(prefix+'PRE' + str(cv))
+            hist1 = model.fit_generator(train_gen, validation_data=val_gen, workers=4, use_multiprocessing=True
+                    ,  epochs=fc_train_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
+
+
+            for layer in model.layers:
+                layer.trainable=True
+            model.compile(loss='categorical_crossentropy',  optimizer=opt,  metrics=['accuracy']) 
+        
+            model.load_weights(best_model_path)
+            print('load model:' ,best_model_path)
+
+            train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,mean = mean_arr)
+            val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False, mean = mean_arr)
+            hist2 = model.fit_generator(train_gen ,validation_data= val_gen, workers=4, use_multiprocessing=True
+                     ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
+
+            model.load_weights(best_model_path)
+            nsml.save(prefix + str(cv))
+
+        if use_merge_bind == True:
+            print('all cv model train complete, now cv model saving start')
+            feature_models = []
+            for bp in best_model_paths:
+                temp_model = load_model(bp)
+                feature_model = Model(inputs=temp_model.inputs,outputs = temp_model.layers[-2].output)
+                feature_models.append(feature_model)
+
+            model_input = Input(shape=input_shape)
+            en_model = ensemble_feature_vec(feature_models,model_input, num_classes)
+            en_model.save('./ensemble.h5')
+            print('save model:',prefix +'Merge' + str(CV_NUM))
+            nsml.report(summary=True)
+            nsml.save(prefix +'Merge' + str(CV_NUM))
+            #why.. low score 0.013....2cv

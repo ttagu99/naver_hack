@@ -36,7 +36,7 @@ from classification_models.senet import SEResNeXt50
 from keras.models import Model,load_model
 from keras.optimizers import Adam, SGD
 from keras import Model, Input
-from keras.layers import Layer, multiply
+from keras.layers import Layer, multiply, Lambda
 
 from sklearn.model_selection import train_test_split
 import imgaug as ia
@@ -45,28 +45,24 @@ import random
 from keras.utils.training_utils import multi_gpu_model
 from keras.preprocessing.image import ImageDataGenerator
 import pandas as pd
+import tensorflow as tf
+
 class TripletLossLayer(Layer):
-	def __init__(self, pos_r, neg_r, **kwargs):
-#		self.alpha = alpha
-		self.neg_r = neg_r
-		self.pos_r = pos_r
+	def __init__(self, **kwargs):
 		super(TripletLossLayer, self).__init__(**kwargs)
 
-	#def cos_similarity(self, y_true, y_pred):
-	#	y_true = K.l2_normalize(y_true, axis=-1)
-	#	y_pred = K.l2_normalize(y_pred, axis=-1)
-	#	return K.sum(y_true * y_pred, axis=-1)
-
-	def cos_similarity(self, y_true, y_pred):
-		y_true = K.l2_normalize(y_true, axis=-1)
-		y_pred = K.l2_normalize(y_pred, axis=-1)
-		return K.mean(K.sum(multiply([y_true,y_pred]), axis=1))
+	def newcos_similarity(self, y_true, y_pred):
+		y_true = K.l2_normalize(y_true)
+		y_pred = K.l2_normalize(y_pred)
+		mat_dot = K.dot(y_true,K.transpose(y_pred))
+		dp = tf.diag_part(mat_dot)
+		return K.sum(dp) +K.epsilon()
 
 	def triplet_loss(self, inputs):
 		a, p, n = inputs
-		p_dist = self.cos_similarity(a,p)
-		n_dist = self.cos_similarity(a,n)
-		return p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
+		p_dist = self.newcos_similarity(a,p)
+		n_dist = self.newcos_similarity(a,n)
+		return p_dist/n_dist #p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
 
 	def call(self, inputs):
 		loss = self.triplet_loss(inputs)
@@ -90,7 +86,7 @@ def build_triple_model(backbone= None, input_shape =  (224,224,3), use_imagenet 
     embedding_p=bs_model(input_p)
     embedding_n=bs_model(input_n)
 
-    triplet_loss_layer = TripletLossLayer(pos_r=1.0, neg_r=3.0, name='triplet_loss_layer')([embedding_a, embedding_p, embedding_n])
+    triplet_loss_layer = TripletLossLayer(name='triplet_loss_layer')([embedding_a, embedding_p, embedding_n])
     model=Model([input_a,input_p,input_n],triplet_loss_layer)
     model.compile(optimizer=opt,loss=None)
     return model
@@ -580,9 +576,13 @@ if __name__ == '__main__':
         report = report_nsml(prefix = prefix,seed = SEED)
         callbacks = [reduce_lr,early_stop,checkpoint,report]
                
-        train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,mean = mean_arr)
-        val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False, mean = mean_arr)
-        hist = model.fit_generator(train_gen ,validation_data= val_gen, workers=4, use_multiprocessing=False
+        #train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,mean = mean_arr)
+        #val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False,mean = mean_arr)
+
+        ##all train same val
+        train_gen = DataGenerator(x_train,input_shape, labels,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
+        #val_gen = DataGenerator(x_train,input_shape, labels,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
+        hist = model.fit_generator(train_gen ,validation_data= train_gen, workers=4, use_multiprocessing=False
                     ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
 
         model.load_weights(best_model_path)
