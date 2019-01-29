@@ -91,7 +91,7 @@ def l2_normalize(v):
 # data preprocess
 def get_feature(model, queries, db):
     img_size = (224, 224)
-    batch_size = 80
+    batch_size = 200
     test_path = DATASET_PATH + '/test/test_data'
 
     intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)
@@ -121,13 +121,25 @@ def get_feature(model, queries, db):
 
     return queries, query_vecs, db, reference_vecs
 
+def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1):
+    base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
+    x = base_model.output
+    x = GlobalAveragePooling2D(name='GAP_LAST')(x)
+    predict = Dense(num_classes, activation='softmax', name='last_softmax')(x)
+    model = Model(inputs=base_model.input, outputs=predict)
+    if base_freeze==True:
+        for layer in base_model.layers:
+            layer.trainable = False
+
+    model.compile(loss='categorical_crossentropy',   optimizer=opt,  metrics=['accuracy'])
+    return model
 
 if __name__ == '__main__':
     args = argparse.ArgumentParser()
 
     # hyperparameters
-    args.add_argument('--epoch', type=int, default=5)
-    args.add_argument('--batch_size', type=int, default=80)
+    args.add_argument('--epoch', type=int, default=50)
+    args.add_argument('--batch_size', type=int, default=200)
     args.add_argument('--num_classes', type=int, default=1383)
 
     # DONOTCHANGE: They are reserved for nsml
@@ -143,11 +155,8 @@ if __name__ == '__main__':
     num_classes = config.num_classes
     input_shape = (224, 224, 3)  # input image shape
 
-    base_model = SEResNet18(input_shape=input_shape, weights='imagenet', include_top= False)#, classes=NCATS)
-    x = base_model.output
-    x = GlobalAveragePooling2D(name='GAP_LAST')(x)
-    predict = Dense(num_classes, activation='softmax', name='last_softmax')(x)
-    model = Model(inputs=base_model.input, outputs=predict)
+    opt = keras.optimizers.Adam(lr=0.0005)
+    model = build_model(backbone= SEResNet18, input_shape = input_shape, use_imagenet = 'imagenet', num_classes=num_classes, base_freeze=True, opt =opt)
     bind_model(model)
 
     if config.pause:
@@ -158,7 +167,7 @@ if __name__ == '__main__':
         bTrainmode = True
 
         """ Initiate RMSprop optimizer """
-        opt = keras.optimizers.rmsprop(lr=0.00045, decay=1e-6)
+        opt = keras.optimizers.Adam(lr=0.0005)
         model.compile(loss='categorical_crossentropy',
                       optimizer=opt,
                       metrics=['accuracy'])
@@ -169,7 +178,8 @@ if __name__ == '__main__':
             rescale=1. / 255,
             shear_range=0.2,
             zoom_range=0.2,
-            horizontal_flip=True)
+            horizontal_flip=True,
+            validation_split=0.2) # set validation split
 
         train_generator = train_datagen.flow_from_directory(
             directory=DATASET_PATH + '/train/train_data',
@@ -178,8 +188,18 @@ if __name__ == '__main__':
             batch_size=batch_size,
             class_mode="categorical",
             shuffle=True,
-            seed=42
-        )
+            seed=42,
+            subset='training') # set as training data
+        
+        val_generator = train_datagen.flow_from_directory(
+            directory=DATASET_PATH + '/train/train_data',
+            target_size=input_shape[:2],
+            color_mode="rgb",
+            batch_size=batch_size,
+            class_mode="categorical",
+            shuffle=True,
+            seed=42,
+            subset='validation') # set as training data
 
         """ Callback """
         monitor = 'acc'
@@ -187,11 +207,33 @@ if __name__ == '__main__':
 
         """ Training loop """
         STEP_SIZE_TRAIN = train_generator.n // train_generator.batch_size
+        STEP_SIZE_VALID = val_generator.n // val_generator.batch_size
         t0 = time.time()
+
+        print('last layer train')
+        res = model.fit_generator(generator=train_generator,
+                                    steps_per_epoch=STEP_SIZE_TRAIN,
+                                    validation_data = val_generator, 
+                                    validation_steps = STEP_SIZE_VALID,
+                                    epochs= 1,
+                                    callbacks=[reduce_lr],
+                                    verbose=1,
+                                    shuffle=True)
+
+        print('all layer train')
+        for layer in model.layers:
+            layer.trainable=True
+
+        model.compile(loss='categorical_crossentropy',
+                      optimizer=opt,
+                      metrics=['accuracy'])
+
         for epoch in range(nb_epoch):
             t1 = time.time()
             res = model.fit_generator(generator=train_generator,
                                       steps_per_epoch=STEP_SIZE_TRAIN,
+                                      validation_data = val_generator, 
+                                      validation_steps = STEP_SIZE_VALID,
                                       initial_epoch=epoch,
                                       epochs=epoch + 1,
                                       callbacks=[reduce_lr],

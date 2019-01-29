@@ -10,7 +10,6 @@ setup(
         'scikit-learn',
         'imgaug',
         'image-classifiers',
-        'pandas',
-        'image-classifiers'
+        'pandas'
     ]
 )

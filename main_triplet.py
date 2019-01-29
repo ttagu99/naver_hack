@@ -22,6 +22,7 @@ from keras.layers import Concatenate
 from keras.layers import Dense, Dropout, Flatten, Activation,Average
 from keras.layers import Conv2D, MaxPooling2D, GlobalAveragePooling2D, BatchNormalization,Input
 from keras.callbacks import ReduceLROnPlateau, EarlyStopping, ModelCheckpoint
+from keras.utils import to_categorical
 from keras import backend as K
 from data_loader import train_data_loader
 from keras.applications.xception import Xception
@@ -46,6 +47,7 @@ from keras.utils.training_utils import multi_gpu_model
 from keras.preprocessing.image import ImageDataGenerator
 import pandas as pd
 import tensorflow as tf
+from keras.losses import categorical_crossentropy
 
 class TripletLossLayer(Layer):
 	def __init__(self, **kwargs):
@@ -59,10 +61,16 @@ class TripletLossLayer(Layer):
 		return K.sum(dp) +K.epsilon()
 
 	def triplet_loss(self, inputs):
-		a, p, n = inputs
+		a, p, n,true_a,true_p,true_n, prd_a, prd_p, prd_n = inputs
 		p_dist = self.newcos_similarity(a,p)
 		n_dist = self.newcos_similarity(a,n)
-		return p_dist/n_dist #p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
+
+		## softmax loss add
+		cat_a = categorical_crossentropy(true_a,prd_a)
+		cat_p = categorical_crossentropy(true_p,prd_p)
+		cat_n = categorical_crossentropy(true_n,prd_n)
+
+		return (p_dist/n_dist) + K.mean(K.mean(cat_a)+K.mean(cat_p) + K.mean(cat_n))#p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
 
 	def call(self, inputs):
 		loss = self.triplet_loss(inputs)
@@ -76,6 +84,34 @@ def build_triple_base_model(backbone= None, input_shape =  (224,224,3), use_imag
     #x = Dense(256, activation='relu')(x)
     model = Model(inputs=base_model.input, outputs=x)
     return model
+
+def build_triple_mix_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, opt = SGD()):
+    bs_model=build_triple_base_model(backbone= backbone, input_shape =  (224,224,3), use_imagenet =use_imagenet)
+    input_a=Input(shape=input_shape, name ='input_anchor')
+    input_p=Input(shape=input_shape, name ='input_pos')
+    input_n=Input(shape=input_shape, name ='input_neg')
+
+    ## label for dense softmax
+    input_label_a = Input(shape = (num_classes,),name = 'input_label_a')
+    input_label_p = Input(shape = (num_classes,),name = 'input_label_p')
+    input_label_n = Input(shape = (num_classes,),name = 'input_label_n')
+
+    embedding_a=bs_model(input_a)
+    embedding_p=bs_model(input_p)
+    embedding_n=bs_model(input_n)
+
+    ## dense softmax
+    pred_label_anchor = Dense(num_classes, activation='softmax', name='pred_label_anchor')(embedding_a)
+    pred_label_pos = Dense(num_classes, activation='softmax', name='pred_label_pos')(embedding_p)
+    pred_label_neg = Dense(num_classes, activation='softmax', name='pred_label_neg')(embedding_n)
+
+    triplet_loss_layer = TripletLossLayer(name='triplet_loss_layer')([embedding_a, embedding_p, embedding_n
+                                                                      , input_label_a, input_label_p, input_label_n
+                                                                      , pred_label_anchor, pred_label_pos,pred_label_neg])
+    model=Model([input_a,input_p,input_n,input_label_a,input_label_p,input_label_n],triplet_loss_layer)
+    model.compile(optimizer=opt,loss=None)
+    return model
+
 
 def build_triple_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, opt = SGD()):
     bs_model=build_triple_base_model(backbone= backbone, input_shape =  (224,224,3), use_imagenet =use_imagenet)
@@ -333,8 +369,11 @@ class DataGenerator(keras.utils.Sequence):
 
         ## debuging
         #print(anchor_path, positive_path, negative_path)
-
-        return anchor, positive, negative 
+        label_a = to_categorical(y=label,num_classes=self.num_classes)
+        label_p = label_a
+        label_n = to_categorical(y=nega_label,num_classes= self.num_classes)
+        
+        return anchor, positive, negative , label_a, label_p, label_n
 
 
     def __getitem__(self, index):
@@ -342,21 +381,31 @@ class DataGenerator(keras.utils.Sequence):
         anchors_np=np.zeros((self.batch_size, self.input_shape[0], self.input_shape[1], self.input_shape[2]))
         poss_np=np.zeros((self.batch_size, self.input_shape[0], self.input_shape[1], self.input_shape[2]))
         negas_np=np.zeros((self.batch_size, self.input_shape[0], self.input_shape[1], self.input_shape[2]))
-        
+
         indexes = self.indexes[index*self.batch_size:(index+1)* self.batch_size]
 
         ancs=[]
         poss=[]
         negs=[]
+        ll_a = []
+        ll_p = []
+        ll_n = []
         for idx in indexes:
-            anc,pos,neg = self.get_triple_set(idx,self.labels[idx])
+            anc,pos,neg, label_a,label_p,label_n = self.get_triple_set(idx,self.labels[idx])
             ancs.append(anc)
             poss.append(pos)
             negs.append(neg)
+            ll_a.append(label_a)
+            ll_p.append(label_p)
+            ll_n.append(label_n)
  
         anchorst = np.array(ancs)
         posst = np.array(poss)
         negast =  np.array(negs)
+
+        label_np_a = np.array(ll_a)
+        label_np_p = np.array(ll_p)
+        label_np_n = np.array(ll_n)
 
         ## debugging
         ## print(anchorst.shape, posst.shape, negast.shape)
@@ -374,7 +423,7 @@ class DataGenerator(keras.utils.Sequence):
         poss_np = normal_inputs(poss_np,self.mean)
         negas_np = normal_inputs(negas_np,self.mean)
 
-        return [anchors_np, poss_np, negas_np], None
+        return [anchors_np, poss_np, negas_np,label_np_a,label_np_p,label_np_n], None
 
     def set_label_imgs(self):
         self.imgs_per_label = {}
@@ -407,7 +456,7 @@ class report_nsml(keras.callbacks.Callback):
         self.seed = seed
     def on_epoch_end(self, epoch, logs={}):
         nsml.report(summary=True, epoch=epoch, loss=logs.get('loss'), val_loss=logs.get('val_loss'))
-        #nsml.save(self.prefix +'_'+ str(self.seed)+'_' +str(epoch))
+        nsml.save(self.prefix +'_'+ str(self.seed)+'_' +str(epoch))
 
 if __name__ == '__main__':
     args = argparse.ArgumentParser()
@@ -424,7 +473,7 @@ if __name__ == '__main__':
     config = args.parse_args()
 
     NUM_GPU = 1
-    SEL_CONF = 9
+    SEL_CONF = 3
     CV_NUM = 1
 
     CONF_LIST = []
@@ -439,7 +488,7 @@ if __name__ == '__main__':
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':1, 'fc_train_epoch':1, 'imagenet':None})
     CONF_LIST.append({'name':'IR', 'input_shape':(224, 224, 3), 'backbone':InceptionResNetV2
                     , 'batch_size':30 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':20, 'fc_train_epoch':10, 'imagenet':'imagenet'})
+                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':50, 'fc_train_epoch':10, 'imagenet':'imagenet'})
     CONF_LIST.append({'name':'NL', 'input_shape':(224, 224, 3), 'backbone':NASNetLarge
                     , 'batch_size':48 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
@@ -456,8 +505,8 @@ if __name__ == '__main__':
                     , 'batch_size':80 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.00005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':10, 'fc_train_epoch':2, 'imagenet':'imagenet'})
     CONF_LIST.append({'name':'SERES18', 'input_shape':(224, 224, 3), 'backbone':SEResNet18
-                    , 'batch_size':80 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':40, 'fc_train_epoch':2, 'imagenet':'imagenet'})
+                    , 'batch_size':80 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.00005
+                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':5, 'fc_train_epoch':2, 'imagenet':'imagenet'})
     CONF_LIST.append({'name':'SEResNeXt50', 'input_shape':(224, 224, 3), 'backbone':SEResNeXt50
                 , 'batch_size':30 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.00005
                 , 'finetune_layer':70, 'fine_batchmul':15,'epoch':40, 'fc_train_epoch':2, 'imagenet':'imagenet'})
@@ -481,7 +530,7 @@ if __name__ == '__main__':
     """ CV Model """
     opt = keras.optimizers.Adam(lr=start_lr)
 
-    model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt)
+    model = build_triple_mix_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt)
     bind_model(model)
     model.summary()
 
@@ -576,15 +625,14 @@ if __name__ == '__main__':
         report = report_nsml(prefix = prefix,seed = SEED)
         callbacks = [reduce_lr,early_stop,checkpoint,report]
                
-        #train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,mean = mean_arr)
-        #val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False,mean = mean_arr)
+        train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
+        val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
 
         ##all train same val
-        train_gen = DataGenerator(x_train,input_shape, labels,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
-        #val_gen = DataGenerator(x_train,input_shape, labels,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
-        hist = model.fit_generator(train_gen ,validation_data= train_gen, workers=4, use_multiprocessing=False
+        #train_gen = DataGenerator(x_train,input_shape, labels,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
+        hist = model.fit_generator(train_gen, validation_data= val_gen, workers=4, use_multiprocessing=False
                     ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
 
-        model.load_weights(best_model_path)
-        nsml.report(summary=True)
-        nsml.save(prefix +'BST')
+        #model.load_weights(best_model_path)
+        #nsml.report(summary=True)
+        #nsml.save(prefix +'BST')
