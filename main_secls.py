@@ -139,7 +139,7 @@ if __name__ == '__main__':
 
     # hyperparameters
     args.add_argument('--epoch', type=int, default=50)
-    args.add_argument('--batch_size', type=int, default=200)
+    args.add_argument('--batch_size', type=int, default=100)
     args.add_argument('--num_classes', type=int, default=1383)
 
     # DONOTCHANGE: They are reserved for nsml
@@ -156,7 +156,7 @@ if __name__ == '__main__':
     input_shape = (224, 224, 3)  # input image shape
 
     opt = keras.optimizers.Adam(lr=0.0005)
-    model = build_model(backbone= SEResNet18, input_shape = input_shape, use_imagenet = 'imagenet', num_classes=num_classes, base_freeze=True, opt =opt)
+    model = build_model(backbone= InceptionResNetV2, input_shape = input_shape, use_imagenet = 'imagenet', num_classes=num_classes, base_freeze=True, opt =opt)
     bind_model(model)
 
     if config.pause:
@@ -242,7 +242,7 @@ if __name__ == '__main__':
             t2 = time.time()
             print(res.history)
             print('Training time for one epoch : %.1f' % ((t2 - t1)))
-            train_loss, train_acc = res.history['loss'][0], res.history['acc'][0]
-            nsml.report(summary=True, epoch=epoch, epoch_total=nb_epoch, loss=train_loss, acc=train_acc)
+            train_loss, train_acc, val_loss, val_acc = res.history['loss'][0], res.history['acc'][0],res.history['val_loss'][0], res.history['val_acc'][0]
+            nsml.report(summary=True, epoch=epoch, epoch_total=nb_epoch, loss=train_loss, acc=train_acc, val_loss=val_loss, val_acc=val_acc)
             nsml.save(epoch)
         print('Total training time : %.1f' % (time.time() - t0))
