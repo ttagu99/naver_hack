@@ -151,9 +151,9 @@ def bind_model(model):
 
 def l2_normalize(v):
     norm = np.linalg.norm(v,axis=1)
-    if norm == 0:
-        return v
-    return v / norm
+    #if norm == 0:
+    #    return v
+    return v / norm[:,None]
 
 
 # data preprocess
@@ -215,7 +215,7 @@ def preprocess(queries, db):
 def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1):
     base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
     x = base_model.output
-    x = GlobalAveragePooling2D()(x)
+    x = GlobalAveragePooling2D(name='GAP_LAST')(x)
     predict = Dense(num_classes, activation='softmax', name='last_softmax')(x)
     model = Model(inputs=base_model.input, outputs=predict)
     if base_freeze==True:

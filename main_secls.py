@@ -93,9 +93,9 @@ def bind_model(model):
 
 def l2_normalize(v):
     norm = np.linalg.norm(v,axis=1)
-    if norm == 0:
-        return v
-    return v / norm
+    #if norm == 0:
+    #    return v
+    return v / norm[:,None]
 
 
 # data preprocess

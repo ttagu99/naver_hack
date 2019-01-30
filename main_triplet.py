@@ -54,8 +54,8 @@ class TripletLossLayer(Layer):
 		super(TripletLossLayer, self).__init__(**kwargs)
 
 	def newcos_similarity(self, y_true, y_pred):
-		y_true = K.l2_normalize(y_true)
-		y_pred = K.l2_normalize(y_pred)
+		y_true = K.l2_normalize(y_true,axis=1)
+		y_pred = K.l2_normalize(y_pred,axis=1)
 		mat_dot = K.dot(y_true,K.transpose(y_pred))
 		dp = tf.diag_part(mat_dot)
 		return K.sum(dp) +K.epsilon()
@@ -183,10 +183,10 @@ def normal_inputs(imgs, mean_arr=None):
         return normal_input(imgs,mean_arr)
 
 def l2_normalize(v):
-    norm = np.linalg.norm(v)
-    if norm == 0:
-        return v
-    return v / norm
+    norm = np.linalg.norm(v,axis=1)
+    #if norm == 0:
+    #    return v
+    return v / norm[:,None]
 
 def normal_input(img, mean_arr=None):
     img = img.astype('float32')
