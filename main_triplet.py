@@ -488,7 +488,7 @@ if __name__ == '__main__':
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':1, 'fc_train_epoch':1, 'imagenet':None})
     CONF_LIST.append({'name':'IR', 'input_shape':(224, 224, 3), 'backbone':InceptionResNetV2
                     , 'batch_size':30 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':50, 'fc_train_epoch':10, 'imagenet':'imagenet'})
+                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':100, 'fc_train_epoch':10, 'imagenet':'imagenet'})
     CONF_LIST.append({'name':'NL', 'input_shape':(224, 224, 3), 'backbone':NASNetLarge
                     , 'batch_size':48 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
@@ -570,69 +570,76 @@ if __name__ == '__main__':
     #    nsml.load(checkpoint='MO2BST', session='Zonber/ir_ph2/106') #InceptionResnetV2 222
     #    nsml.save('MO2BST')  # this is display model name at lb
 
+    #bTrainmode = False
+    #if config.mode == 'train':
+    #    bTrainmode = True
+
+    #    x_train = np.asarray(img_list)
+    #    labels = np.asarray(label_list)
+    #    #y_train = keras.utils.to_categorical(labels, num_classes=num_classes)
+
+    #    print(len(labels), 'train samples')
+
+
+    #    opt = keras.optimizers.Adam(lr=start_lr)
+    #    #model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape,opt = opt)
+    #    #xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
+    #    xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, labels, test_size=0.15, random_state=SEED,stratify=labels)
+
+    #    print('shape:',xx_train.shape,'val shape:',xx_val.shape)
+    #    sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+    #    seq = iaa.Sequential(
+    #        [
+    #            iaa.SomeOf((0, 3),[
+    #            iaa.Fliplr(0.5), # horizontally flip 50% of all images
+    #            iaa.Flipud(0.2), # vertically flip 20% of all images
+    #            sometimes(iaa.CropAndPad(
+    #                percent=(-0.05, 0.1),
+    #                pad_mode=['reflect']
+    #            )),
+    #            sometimes( iaa.OneOf([
+    #                iaa.Affine(rotate=0),
+    #                iaa.Affine(rotate=90),
+    #                iaa.Affine(rotate=180),
+    #                iaa.Affine(rotate=270)
+    #            ])),
+    #            sometimes(iaa.Affine(
+    #                scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
+    #                translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
+    #                rotate=(-45, 45), # rotate by -45 to +45 degrees
+    #                shear=(-5, 5), 
+    #                order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
+    #                mode=['reflect'] 
+    #            ))
+    #            ]),
+    #        ],
+    #        random_order=True
+    #    )
+
+    #    """ Callback """
+    #    monitor = 'val_loss'
+    #    reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=3,factor=0.2,verbose=1)
+    #    early_stop = EarlyStopping(monitor=monitor, patience=6)
+    #    best_model_path = './best_model' + str(SEED) + '.h5'
+    #    checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
+    #    report = report_nsml(prefix = prefix,seed = SEED)
+    #    callbacks = [reduce_lr,early_stop,checkpoint,report]
+               
+    #    train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
+    #    val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
+
+    #    ##all train same val
+    #    #train_gen = DataGenerator(x_train,input_shape, labels,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
+    #    hist = model.fit_generator(train_gen, validation_data= val_gen, workers=4, use_multiprocessing=False
+    #                ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
+
+    #    #model.load_weights(best_model_path)
+    #    #nsml.report(summary=True)
+    #    #nsml.save(prefix +'BST')
+
     bTrainmode = False
     if config.mode == 'train':
         bTrainmode = True
-
-        x_train = np.asarray(img_list)
-        labels = np.asarray(label_list)
-        #y_train = keras.utils.to_categorical(labels, num_classes=num_classes)
-
-        print(len(labels), 'train samples')
-
-
-        opt = keras.optimizers.Adam(lr=start_lr)
-        #model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape,opt = opt)
-        #xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
-        xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, labels, test_size=0.15, random_state=SEED,stratify=labels)
-
-        print('shape:',xx_train.shape,'val shape:',xx_val.shape)
-        sometimes = lambda aug: iaa.Sometimes(0.5, aug)
-        seq = iaa.Sequential(
-            [
-                iaa.SomeOf((0, 3),[
-                iaa.Fliplr(0.5), # horizontally flip 50% of all images
-                iaa.Flipud(0.2), # vertically flip 20% of all images
-                sometimes(iaa.CropAndPad(
-                    percent=(-0.05, 0.1),
-                    pad_mode=['reflect']
-                )),
-                sometimes( iaa.OneOf([
-                    iaa.Affine(rotate=0),
-                    iaa.Affine(rotate=90),
-                    iaa.Affine(rotate=180),
-                    iaa.Affine(rotate=270)
-                ])),
-                sometimes(iaa.Affine(
-                    scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
-                    translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
-                    rotate=(-45, 45), # rotate by -45 to +45 degrees
-                    shear=(-5, 5), 
-                    order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
-                    mode=['reflect'] 
-                ))
-                ]),
-            ],
-            random_order=True
-        )
-
-        """ Callback """
-        monitor = 'val_loss'
-        reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=3,factor=0.2,verbose=1)
-        early_stop = EarlyStopping(monitor=monitor, patience=6)
-        best_model_path = './best_model' + str(SEED) + '.h5'
-        checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
-        report = report_nsml(prefix = prefix,seed = SEED)
-        callbacks = [reduce_lr,early_stop,checkpoint,report]
-               
-        train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
-        val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
-
-        ##all train same val
-        #train_gen = DataGenerator(x_train,input_shape, labels,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
-        hist = model.fit_generator(train_gen, validation_data= val_gen, workers=4, use_multiprocessing=False
-                    ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
-
-        #model.load_weights(best_model_path)
-        #nsml.report(summary=True)
-        #nsml.save(prefix +'BST')
+        #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
+        nsml.load(checkpoint='IR_222_5', session='Zonber/ir_ph2/197') #InceptionResnetV2 222
+        nsml.save(0)  # this is display model name at lb
