@@ -34,6 +34,16 @@ from keras.models import Model,load_model
 from keras.optimizers import Adam, SGD
 from keras import Model, Input
 from keras.layers import Layer, multiply, Lambda
+from keras.utils import to_categorical
+from sklearn.model_selection import train_test_split
+import imgaug as ia
+from imgaug import augmenters as iaa
+import random
+from keras.utils.training_utils import multi_gpu_model
+from keras.preprocessing.image import ImageDataGenerator
+import pandas as pd
+import tensorflow as tf
+from keras.losses import categorical_crossentropy
 
 def bind_model(model):
     def save(dir_name):
@@ -82,7 +92,7 @@ def bind_model(model):
 
 
 def l2_normalize(v):
-    norm = np.linalg.norm(v)
+    norm = np.linalg.norm(v,axis=1)
     if norm == 0:
         return v
     return v / norm
@@ -134,6 +144,51 @@ def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imag
     model.compile(loss='categorical_crossentropy',   optimizer=opt,  metrics=['accuracy'])
     return model
 
+class DataGenerator(keras.utils.Sequence):
+    'Generates data for Keras'
+    def __init__(self, image_paths, input_shape, labels, batch_size, aug_seq, num_classes, use_aug = True, shuffle = True, mean=None):
+        'Initialization'
+        self.image_paths = image_paths
+        self.input_shape = input_shape
+        self.batch_size = batch_size
+        self.labels = labels
+        self.aug_seq = aug_seq
+        self.use_aug = use_aug
+        self.num_classes = num_classes
+        self.shuffle = shuffle
+        self.on_epoch_end()
+        self.mean = mean
+
+    def __len__(self):
+        'Denotes the number of batches per epoch'
+        return int(np.ceil(len(self.image_paths) / float(self.batch_size)))
+
+    def __getitem__(self, index):
+        'Generate one batch of data'
+        batch_features = np.zeros((self.batch_size, self.input_shape[0], self.input_shape[1], self.input_shape[2]))
+        features = []
+        batch_labels = np.zeros((self.batch_size, self.num_classes))
+        indexes = self.indexes[index*self.batch_size:(index+1)* self.batch_size]
+        files = self.image_paths[indexes]
+        features = read_image_batch(files, (self.input_shape[0], self.input_shape[1]))
+        features = np.array(features)
+        if self.use_aug == True:
+            batch_features[:,:,:,:]  = self.aug_seq.augment_images(features)
+        else:
+            batch_features[:,:,:,:]  = features
+
+        batch_labels[:,:] =  self.labels[indexes]
+        batch_features = normal_inputs(batch_features,self.mean)
+        return batch_features, batch_labels
+
+    def on_epoch_end(self):
+        'Updates indexes after each epoch'
+        org_idx = np.arange(len(self.image_paths))
+        mod_idx = np.random.choice(org_idx, (self.__len__()*self.batch_size) - len(self.image_paths))
+        self.indexes = np.concatenate([org_idx,mod_idx])
+        if self.shuffle == True:
+            np.random.shuffle(self.indexes)
+
 if __name__ == '__main__':
     args = argparse.ArgumentParser()
 
@@ -149,6 +204,35 @@ if __name__ == '__main__':
     args.add_argument('--pause', type=int, default=0, help='model 을 load 할때 1로 설정됩니다.')
     config = args.parse_args()
 
+    sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+    seq = iaa.Sequential(
+        [
+            iaa.SomeOf((0, 3),[
+            iaa.Fliplr(0.5), # horizontally flip 50% of all images
+            iaa.Flipud(0.2), # vertically flip 20% of all images
+            sometimes(iaa.CropAndPad(
+                percent=(-0.05, 0.1),
+                pad_mode=['reflect']
+            )),
+            sometimes( iaa.OneOf([
+                iaa.Affine(rotate=0),
+                iaa.Affine(rotate=90),
+                iaa.Affine(rotate=180),
+                iaa.Affine(rotate=270)
+            ])),
+            sometimes(iaa.Affine(
+                scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
+                translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
+                rotate=(-45, 45), # rotate by -45 to +45 degrees
+                shear=(-5, 5), 
+                order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
+                mode=['reflect'] 
+            ))
+            ]),
+        ],
+        random_order=True
+    )
+    
     # training parameters
     nb_epoch = config.epoch
     batch_size = config.batch_size
@@ -167,19 +251,17 @@ if __name__ == '__main__':
         bTrainmode = True
 
         """ Initiate RMSprop optimizer """
-        opt = keras.optimizers.Adam(lr=0.0005)
         model.compile(loss='categorical_crossentropy',
                       optimizer=opt,
                       metrics=['accuracy'])
 
         print('dataset path', DATASET_PATH)
 
-        train_datagen = ImageDataGenerator(
-            rescale=1. / 255,
-            shear_range=0.2,
-            zoom_range=0.2,
-            horizontal_flip=True,
-            validation_split=0.2) # set validation split
+        split_ratio = 0.2
+        SEED=222
+        train_datagen = ImageDataGenerator(rescale=1. / 255, validation_split=split_ratio,preprocessing_function = seq.augment_image) # set validation split
+        val_datagen = ImageDataGenerator(rescale=1. / 255, validation_split=split_ratio)
+
 
         train_generator = train_datagen.flow_from_directory(
             directory=DATASET_PATH + '/train/train_data',
@@ -188,21 +270,21 @@ if __name__ == '__main__':
             batch_size=batch_size,
             class_mode="categorical",
             shuffle=True,
-            seed=42,
+            seed=SEED,
             subset='training') # set as training data
         
-        val_generator = train_datagen.flow_from_directory(
+        val_generator = val_datagen.flow_from_directory(
             directory=DATASET_PATH + '/train/train_data',
             target_size=input_shape[:2],
             color_mode="rgb",
             batch_size=batch_size,
             class_mode="categorical",
-            shuffle=True,
-            seed=42,
+            shuffle=False,
+            seed=SEED,
             subset='validation') # set as training data
 
         """ Callback """
-        monitor = 'acc'
+        monitor = 'val_acc'
         reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=3)
 
         """ Training loop """

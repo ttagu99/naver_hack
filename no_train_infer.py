@@ -150,7 +150,7 @@ def bind_model(model):
 
 
 def l2_normalize(v):
-    norm = np.linalg.norm(v)
+    norm = np.linalg.norm(v,axis=1)
     if norm == 0:
         return v
     return v / norm
@@ -159,10 +159,10 @@ def l2_normalize(v):
 # data preprocess
 def get_feature(model, queries, db):
     img_size = (224, 224)
-    batch_size = 100
+    batch_size = 200
     test_path = DATASET_PATH + '/test/test_data'
 
-    intermediate_layer_model = Model(inputs=model.input, outputs=model.layers[-2].output)
+    intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)
     test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32')
     query_generator = test_datagen.flow_from_directory(
         directory=test_path,
@@ -189,6 +189,18 @@ def get_feature(model, queries, db):
 
     return queries, query_vecs, db, reference_vecs
 
+def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1):
+    base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
+    x = base_model.output
+    x = GlobalAveragePooling2D(name='GAP_LAST')(x)
+    predict = Dense(num_classes, activation='softmax', name='last_softmax')(x)
+    model = Model(inputs=base_model.input, outputs=predict)
+    if base_freeze==True:
+        for layer in base_model.layers:
+            layer.trainable = False
+
+    model.compile(loss='categorical_crossentropy',   optimizer=opt,  metrics=['accuracy'])
+    return model
 
 # data preprocess
 def preprocess(queries, db):
@@ -397,5 +409,5 @@ if __name__ == '__main__':
     if config.mode == 'train':
         bTrainmode = True
         #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
-        nsml.load(checkpoint='IR0', session='Zonber/ir_ph2/8') #InceptionResnetV2 222
+        nsml.load(checkpoint='10', session='Zonber/ir_ph2/206') #InceptionResnetV2 222
         nsml.save(0)  # this is display model name at lb
