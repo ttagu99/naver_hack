@@ -58,7 +58,7 @@ class TripletLossLayer(Layer):
 		y_pred = K.l2_normalize(y_pred,axis=1)
 		mat_dot = K.dot(y_true,K.transpose(y_pred))
 		dp = tf.diag_part(mat_dot)
-		return K.mean(dp) +K.epsilon()
+		return K.sum(dp) +K.epsilon()
 
 	def triplet_loss(self, inputs):
 		a, p, n,true_a,true_p,true_n, prd_a, prd_p, prd_n = inputs
@@ -255,20 +255,29 @@ def get_feature(model, queries, db):
         target_size=img_size,
         classes=['query'],
         color_mode="rgb",
-        batch_size=batch_size,
+        batch_size=1,
         class_mode=None,
         shuffle=False
     )
+    query_imgs=[]
+    for i in range(query_generator.n):
+        query_imgs.append(query_generator.next())
+    print('query_imgs length:',len(query_imgs))
 
     reference_generator = test_datagen.flow_from_directory(
         directory=test_path,
         target_size=img_size,
         classes=['reference'],
         color_mode="rgb",
-        batch_size=batch_size,
+        batch_size=1,
         class_mode=None,
         shuffle=False
     )
+
+    ref_imgs=[]
+    for i in range(reference_generator.n):
+        ref_imgs.append(reference_generator.next())
+    print('ref_imgs length:',len(ref_imgs))
 
     intermediate_layer_model = Model(inputs=model.input[0], outputs=model.get_layer('triplet_loss_layer').input[0])
     intermediate_layer_model.summary()
