@@ -271,11 +271,11 @@ def get_feature(model, queries, db):
         shuffle=False
     )
 
-    intermediate_layer_model = Model(inputs=model.input[0], outputs=model.get_layer('triplet_loss_layer').input[0])
-    intermediate_layer_model.summary()
+    #intermediate_layer_model = Model(inputs=model.input[0], outputs=model.get_layer('triplet_loss_layer').input[0])
+    #intermediate_layer_model.summary()
     print('quer_gen length:',len(query_generator), 'refer_gen length:',len(reference_generator))
-    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator), verbose=1)
-    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),verbose=1)
+    query_vecs = model.predict_generator(query_generator, steps=len(query_generator), verbose=1)
+    reference_vecs = model.predict_generator(reference_generator, steps=len(reference_generator),verbose=1)
     return queries, query_vecs, db, reference_vecs
 
 # data preprocess
@@ -570,7 +570,8 @@ if __name__ == '__main__':
         #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
         nsml.load(checkpoint='0', session='Zonber/ir_ph2/222') #InceptionResnetV2 222
         print('convert start model')
-        model_r = reduce_keras_model(model)
+        intermediate_layer_model = Model(inputs=model.input[0], outputs=model.get_layer('triplet_loss_layer').input[0])
+        model_r = reduce_keras_model(intermediate_layer_model)
         print('convert complete reduce model')
         bind_model(model_r)
         print('binde reduce model complete')
