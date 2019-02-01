@@ -53,6 +53,9 @@ class TripletLossLayer(Layer):
 	def __init__(self, **kwargs):
 		super(TripletLossLayer, self).__init__(**kwargs)
 
+	def neweuclidian_dist(self,y_true,y_pred):
+		return None
+
 	def newcos_similarity(self, y_true, y_pred):
 		y_true = K.l2_normalize(y_true,axis=1)
 		y_pred = K.l2_normalize(y_pred,axis=1)
@@ -61,16 +64,22 @@ class TripletLossLayer(Layer):
 		return K.mean(dp) +K.epsilon()
 
 	def triplet_loss(self, inputs):
+		a, p, n = inputs
+		p_sim = self.newcos_similarity(a,p) # new cosine 0~1 upper is more similar
+		n_sim = self.newcos_similarity(a,n)
+		return n_sim/p_sim
+
+	def triplet_mix_loss(self, inputs):
 		a, p, n,true_a,true_p,true_n, prd_a, prd_p, prd_n = inputs
-		p_dist = self.newcos_similarity(a,p)
-		n_dist = self.newcos_similarity(a,n)
+		p_sim = self.newcos_similarity(a,p) # new cosine 0~1 upper is more similar
+		n_sim = self.newcos_similarity(a,n)
 
 		## softmax loss add
 		cat_a = categorical_crossentropy(true_a,prd_a)
 		cat_p = categorical_crossentropy(true_p,prd_p)
 		cat_n = categorical_crossentropy(true_n,prd_n)
 
-		return p_dist - n_dist + K.mean(K.mean(cat_a)+K.mean(cat_p) + K.mean(cat_n))#p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
+		return n_sim/p_sim + K.mean(K.mean(cat_a)+K.mean(cat_p) + K.mean(cat_n))#p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
 
 	def call(self, inputs):
 		loss = self.triplet_loss(inputs)
@@ -111,7 +120,6 @@ def build_triple_mix_model(backbone= None, input_shape =  (224,224,3), use_image
     model=Model([input_a,input_p,input_n,input_label_a,input_label_p,input_label_n],triplet_loss_layer)
     model.compile(optimizer=opt,loss=None)
     return model
-
 
 def build_triple_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, opt = SGD()):
     bs_model=build_triple_base_model(backbone= backbone, input_shape =  (224,224,3), use_imagenet =use_imagenet)
@@ -197,11 +205,13 @@ def normal_input(img, mean_arr=None):
 def bind_model(model):
     def save(dir_name):
         os.makedirs(dir_name, exist_ok=True)
-        model.save_weights(os.path.join(dir_name, 'model'))
+        model.save(os.path.join(dir_name, 'model'))
+        #model.save_weights(os.path.join(dir_name, 'model'))
         print('model saved!')
 
     def load(file_path):
-        model.load_weights(file_path)
+        model = load_model(file_path)
+        #model.load_weights(file_path)
         print('model loaded!')
 
     def infer(queries, _):
@@ -422,8 +432,8 @@ class DataGenerator(keras.utils.Sequence):
         anchors_np = normal_inputs(anchors_np,self.mean)
         poss_np = normal_inputs(poss_np,self.mean)
         negas_np = normal_inputs(negas_np,self.mean)
-
-        return [anchors_np, poss_np, negas_np,label_np_a,label_np_p,label_np_n], None
+        return [anchors_np, poss_np, negas_np], None
+        #return [anchors_np, poss_np, negas_np,label_np_a,label_np_p,label_np_n], None
 
     def set_label_imgs(self):
         self.imgs_per_label = {}
@@ -529,8 +539,8 @@ if __name__ == '__main__':
 
     """ CV Model """
     opt = keras.optimizers.Adam(lr=start_lr)
-
-    model = build_triple_mix_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt)
+    #model = build_triple_mix_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes,opt = opt)
+    model = build_triple_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes,opt = opt)
     bind_model(model)
     model.summary()
 
@@ -575,7 +585,8 @@ if __name__ == '__main__':
 
 
         opt = keras.optimizers.Adam(lr=start_lr)
-        #model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape,opt = opt)
+        #model = build_triple_mix_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt)
+        model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt)
         #xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
         xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, labels, test_size=0.15, random_state=SEED,stratify=labels)
 

@@ -198,11 +198,13 @@ def normal_input(img, mean_arr=None):
 def bind_model(model):
     def save(dir_name):
         os.makedirs(dir_name, exist_ok=True)
-        model.save_weights(os.path.join(dir_name, 'model'))
+        model.save(os.path.join(dir_name, 'model'))
+        #model.save_weights(os.path.join(dir_name, 'model'))
         print('model saved!')
 
     def load(file_path):
-        model.load_weights(file_path)
+        model = load_model(file_path)
+        #model.load_weights(file_path)
         print('model loaded!')
 
     def infer(queries, _):
@@ -533,7 +535,7 @@ if __name__ == '__main__':
 
     model = build_triple_mix_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes,opt = opt)
     bind_model(model)
-    model.summary()
+    #model.summary()
 
     """ Load data """
     print('dataset path', DATASET_PATH)
@@ -572,6 +574,7 @@ if __name__ == '__main__':
         print('convert start model')
         intermediate_layer_model = Model(inputs=model.input[0], outputs=model.get_layer('triplet_loss_layer').input[0])
         model_r = reduce_keras_model(intermediate_layer_model)
+        model_r.summary()
         print('convert complete reduce model')
         bind_model(model_r)
         print('binde reduce model complete')

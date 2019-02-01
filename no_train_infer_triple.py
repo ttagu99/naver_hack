@@ -197,11 +197,13 @@ def normal_input(img, mean_arr=None):
 def bind_model(model):
     def save(dir_name):
         os.makedirs(dir_name, exist_ok=True)
-        model.save_weights(os.path.join(dir_name, 'model'))
+        model.save(os.path.join(dir_name, 'model'))
+        #model.save_weights(os.path.join(dir_name, 'model'))
         print('model saved!')
 
     def load(file_path):
-        model.load_weights(file_path)
+        model = load_model(file_path)
+        #model.load_weights(file_path)
         print('model loaded!')
 
     def infer(queries, _):
@@ -246,7 +248,7 @@ def bind_model(model):
 # data preprocess
 def get_feature(model, queries, db):
     img_size = (224, 224)
-    batch_size = 200
+    batch_size = 400
     test_path = DATASET_PATH + '/test/test_data'
     test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32')
 
@@ -255,7 +257,7 @@ def get_feature(model, queries, db):
         target_size=img_size,
         classes=['query'],
         color_mode="rgb",
-        batch_size=1,
+        batch_size=batch_size,
         class_mode=None,
         shuffle=False
     )
@@ -269,21 +271,16 @@ def get_feature(model, queries, db):
         target_size=img_size,
         classes=['reference'],
         color_mode="rgb",
-        batch_size=1,
+        batch_size=batch_size,
         class_mode=None,
         shuffle=False
     )
 
-    ref_imgs=[]
-    for i in range(reference_generator.n):
-        ref_imgs.append(reference_generator.next())
-    print('ref_imgs length:',len(ref_imgs))
-
     intermediate_layer_model = Model(inputs=model.input[0], outputs=model.get_layer('triplet_loss_layer').input[0])
-    intermediate_layer_model.summary()
+    #intermediate_layer_model.summary()
     print('quer_gen length:',len(query_generator), 'refer_gen length:',len(reference_generator))
-    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator), verbose=1)
-    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),verbose=1)
+    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator), verbose=0)
+    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),verbose=0)
     return queries, query_vecs, db, reference_vecs
 
 # data preprocess
@@ -539,9 +536,9 @@ if __name__ == '__main__':
     """ CV Model """
     opt = keras.optimizers.Adam(lr=start_lr)
 
-    model = build_triple_mix_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt)
+    model = build_triple_mix_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes,opt = opt)
     bind_model(model)
-    model.summary()
+    #model.summary()
 
     """ Load data """
     print('dataset path', DATASET_PATH)
@@ -572,76 +569,76 @@ if __name__ == '__main__':
     if config.pause:
         nsml.paused(scope=locals())
 
-    bTrainmode = False
-    if config.mode == 'train':
-        bTrainmode = True
+    #bTrainmode = False
+    #if config.mode == 'train':
+    #    bTrainmode = True
 
-        x_train = np.asarray(img_list)
-        labels = np.asarray(label_list)
-        #y_train = keras.utils.to_categorical(labels, num_classes=num_classes)
+    #    x_train = np.asarray(img_list)
+    #    labels = np.asarray(label_list)
+    #    #y_train = keras.utils.to_categorical(labels, num_classes=num_classes)
 
-        print(len(labels), 'train samples')
+    #    print(len(labels), 'train samples')
 
 
-        opt = keras.optimizers.Adam(lr=start_lr)
-        #model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape,opt = opt)
-        #xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
-        xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, labels, test_size=0.15, random_state=SEED,stratify=labels)
+    #    opt = keras.optimizers.Adam(lr=start_lr)
+    #    #model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape,opt = opt)
+    #    #xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
+    #    xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, labels, test_size=0.15, random_state=SEED,stratify=labels)
 
-        print('shape:',xx_train.shape,'val shape:',xx_val.shape)
-        sometimes = lambda aug: iaa.Sometimes(0.5, aug)
-        seq = iaa.Sequential(
-            [
-                iaa.SomeOf((0, 3),[
-                iaa.Fliplr(0.5), # horizontally flip 50% of all images
-                iaa.Flipud(0.2), # vertically flip 20% of all images
-                sometimes(iaa.CropAndPad(
-                    percent=(-0.05, 0.1),
-                    pad_mode=['reflect']
-                )),
-                sometimes( iaa.OneOf([
-                    iaa.Affine(rotate=0),
-                    iaa.Affine(rotate=90),
-                    iaa.Affine(rotate=180),
-                    iaa.Affine(rotate=270)
-                ])),
-                sometimes(iaa.Affine(
-                    scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
-                    translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
-                    rotate=(-45, 45), # rotate by -45 to +45 degrees
-                    shear=(-5, 5), 
-                    order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
-                    mode=['reflect'] 
-                ))
-                ]),
-            ],
-            random_order=True
-        )
+    #    print('shape:',xx_train.shape,'val shape:',xx_val.shape)
+    #    sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+    #    seq = iaa.Sequential(
+    #        [
+    #            iaa.SomeOf((0, 3),[
+    #            iaa.Fliplr(0.5), # horizontally flip 50% of all images
+    #            iaa.Flipud(0.2), # vertically flip 20% of all images
+    #            sometimes(iaa.CropAndPad(
+    #                percent=(-0.05, 0.1),
+    #                pad_mode=['reflect']
+    #            )),
+    #            sometimes( iaa.OneOf([
+    #                iaa.Affine(rotate=0),
+    #                iaa.Affine(rotate=90),
+    #                iaa.Affine(rotate=180),
+    #                iaa.Affine(rotate=270)
+    #            ])),
+    #            sometimes(iaa.Affine(
+    #                scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
+    #                translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
+    #                rotate=(-45, 45), # rotate by -45 to +45 degrees
+    #                shear=(-5, 5), 
+    #                order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
+    #                mode=['reflect'] 
+    #            ))
+    #            ]),
+    #        ],
+    #        random_order=True
+    #    )
 
-        """ Callback """
-        monitor = 'val_loss'
-        reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=3,factor=0.2,verbose=1)
-        early_stop = EarlyStopping(monitor=monitor, patience=6)
-        best_model_path = './best_model' + str(SEED) + '.h5'
-        checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
-        report = report_nsml(prefix = prefix,seed = SEED)
-        callbacks = [reduce_lr,early_stop,checkpoint,report]
+    #    """ Callback """
+    #    monitor = 'val_loss'
+    #    reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=3,factor=0.2,verbose=1)
+    #    early_stop = EarlyStopping(monitor=monitor, patience=6)
+    #    best_model_path = './best_model' + str(SEED) + '.h5'
+    #    checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
+    #    report = report_nsml(prefix = prefix,seed = SEED)
+    #    callbacks = [reduce_lr,early_stop,checkpoint,report]
                
-        train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
-        val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False,mean = mean_arr)
+    #    train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
+    #    val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False,mean = mean_arr)
 
-        ##all train same val
-        #train_gen = DataGenerator(x_train,input_shape, labels,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
-        hist = model.fit_generator(train_gen, validation_data= val_gen, workers=4, use_multiprocessing=False
-                    ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
+    #    ##all train same val
+    #    #train_gen = DataGenerator(x_train,input_shape, labels,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
+    #    hist = model.fit_generator(train_gen, validation_data= val_gen, workers=4, use_multiprocessing=False
+    #                ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
 
         #model.load_weights(best_model_path)
         #nsml.report(summary=True)
         #nsml.save(prefix +'BST')
 
-    #bTrainmode = False
-    #if config.mode == 'train':
-    #    bTrainmode = True
-    #    #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
-    #    nsml.load(checkpoint='IR_222_5', session='Zonber/ir_ph2/197') #InceptionResnetV2 222
-    #    nsml.save(0)  # this is display model name at lb
+    bTrainmode = False
+    if config.mode == 'train':
+        bTrainmode = True
+        #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
+        nsml.load(checkpoint='0', session='Zonber/ir_ph2/222') #InceptionResnetV2 222
+        nsml.save(0)  # this is display model name at lb
