@@ -167,7 +167,7 @@ def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imag
     gap = GlobalAveragePooling2D(name='GAP_LAST')(x)
     #gmp = GlobalMaxPooling2D(name='GMP_LAST')(x)
     g_con = Concatenate(name='G_CON')([gap,gap1,gap2,gap3,gap4])
-    #g_con = Dropout(rate=0.5)(g_con)
+    g_con = Dropout(rate=0.5)(g_con)
     predict = Dense(num_classes, activation='softmax', name='last_softmax')(g_con)
     model = Model(inputs=base_model.input, outputs=predict)
     if base_freeze==True:
