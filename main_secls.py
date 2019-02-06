@@ -13,11 +13,11 @@ import numpy as np
 from nsml import DATASET_PATH
 import keras
 from keras.models import Sequential, Model
-from keras.layers import Dense, Dropout, Flatten, Activation
+from keras.layers import Dense, Dropout, Flatten, Activation, Concatenate
 from keras.layers import Conv2D, MaxPooling2D
 from keras.callbacks import ReduceLROnPlateau
 from keras.preprocessing.image import ImageDataGenerator
-from keras.layers import Conv2D, MaxPooling2D, GlobalAveragePooling2D, BatchNormalization,Input
+from keras.layers import Conv2D, MaxPooling2D, GlobalAveragePooling2D, BatchNormalization,Input, GlobalMaxPooling2D
 from keras.callbacks import ReduceLROnPlateau, EarlyStopping, ModelCheckpoint
 from keras import backend as K
 from data_loader import train_data_loader
@@ -103,9 +103,10 @@ def get_feature(model, queries, db):
     img_size = (224, 224)
     batch_size = 200
     test_path = DATASET_PATH + '/test/test_data'
-
-    intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)
+    intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('G_CON').output)
     test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32')
+    test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.fliplr)
+
     query_generator = test_datagen.flow_from_directory(
         directory=test_path,
         target_size=img_size,
@@ -115,8 +116,18 @@ def get_feature(model, queries, db):
         class_mode=None,
         shuffle=False
     )
-    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator), verbose=1)
-
+    query_generator_lr = test_datagen_lr.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['query'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )    
+    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),workers=4)
+    query_vecs_lr = intermediate_layer_model.predict_generator(query_generator_lr, steps=len(query_generator_lr),workers=4)
+    query_vecs = np.concatenate([query_vecs,query_vecs_lr],axis=1)
     reference_generator = test_datagen.flow_from_directory(
         directory=test_path,
         target_size=img_size,
@@ -126,16 +137,38 @@ def get_feature(model, queries, db):
         class_mode=None,
         shuffle=False
     )
-    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),
-                                                                verbose=1)
-
+    reference_generator_lr = test_datagen_lr.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['reference'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )
+    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
+    reference_vecs_lr = intermediate_layer_model.predict_generator(reference_generator_lr, steps=len(reference_generator_lr),workers=4)
+    reference_vecs = np.concatenate([reference_vecs,reference_vecs_lr],axis=1)
     return queries, query_vecs, db, reference_vecs
 
 def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1):
     base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
     x = base_model.output
-    x = GlobalAveragePooling2D(name='GAP_LAST')(x)
-    predict = Dense(num_classes, activation='softmax', name='last_softmax')(x)
+    #x = Flatten(name='FLATTEN_LAST')(x)
+    #skip_connection_layers = (594, 260, 16, 9)
+
+
+
+    gap1 = GlobalAveragePooling2D(name='GAP_1')(base_model.layers[594].output)
+    gap2 = GlobalAveragePooling2D(name='GAP_2')(base_model.layers[260].output)
+    gap3 = GlobalAveragePooling2D(name='GAP_3')(base_model.layers[16].output)
+    gap4 = GlobalAveragePooling2D(name='GAP_4')(base_model.layers[9].output)
+
+    gap = GlobalAveragePooling2D(name='GAP_LAST')(x)
+    #gmp = GlobalMaxPooling2D(name='GMP_LAST')(x)
+    g_con = Concatenate(name='G_CON')([gap,gap1,gap2,gap3,gap4])
+    #g_con = Dropout(rate=0.5)(g_con)
+    predict = Dense(num_classes, activation='softmax', name='last_softmax')(g_con)
     model = Model(inputs=base_model.input, outputs=predict)
     if base_freeze==True:
         for layer in base_model.layers:
@@ -189,6 +222,15 @@ class DataGenerator(keras.utils.Sequence):
         if self.shuffle == True:
             np.random.shuffle(self.indexes)
 
+class report_nsml(keras.callbacks.Callback):
+    def __init__(self, prefix, seed):
+        'Initialization'
+        self.prefix = prefix
+        self.seed = seed
+    def on_epoch_end(self, epoch, logs={}):
+        nsml.report(summary=True, epoch=epoch, loss=logs.get('loss'), val_loss=logs.get('val_loss'),acc=logs.get('acc'),val_acc=logs.get('val_acc'))
+        nsml.save(self.prefix +'_'+ str(self.seed)+'_' +str(epoch))
+
 if __name__ == '__main__':
     args = argparse.ArgumentParser()
 
@@ -205,13 +247,14 @@ if __name__ == '__main__':
     config = args.parse_args()
 
     sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+    lesssometimes = lambda aug: iaa.Sometimes(0.3, aug)
     seq = iaa.Sequential(
         [
             iaa.SomeOf((0, 3),[
             iaa.Fliplr(0.5), # horizontally flip 50% of all images
             iaa.Flipud(0.2), # vertically flip 20% of all images
             sometimes(iaa.CropAndPad(
-                percent=(-0.05, 0.1),
+                percent=(-0.1, 0.2),
                 pad_mode=['reflect']
             )),
             sometimes( iaa.OneOf([
@@ -221,13 +264,50 @@ if __name__ == '__main__':
                 iaa.Affine(rotate=270)
             ])),
             sometimes(iaa.Affine(
-                scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
+                scale={"x": (0.7, 1.3), "y": (0.7, 1.3)}, 
                 translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
                 rotate=(-45, 45), # rotate by -45 to +45 degrees
                 shear=(-5, 5), 
                 order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
                 mode=['reflect'] 
-            ))
+            )),
+            lesssometimes( iaa.SomeOf((0, 5),
+                        [
+                            iaa.OneOf([
+                                iaa.GaussianBlur((0, 3.0)),
+                                iaa.AverageBlur(k=(2, 7)),
+                                iaa.MedianBlur(k=(3, 5)),
+                            ]),
+                            iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)),
+                            iaa.Emboss(alpha=(0, 1.0), strength=(0, 2.0)),
+                            sometimes(iaa.OneOf([
+                                iaa.EdgeDetect(alpha=(0, 0.7)),
+                                iaa.DirectedEdgeDetect(
+                                    alpha=(0, 0.7), direction=(0.0, 1.0)
+                                ),
+                            ])),
+                            iaa.AdditiveGaussianNoise(
+                                loc=0, scale=(0.0, 0.05*255), per_channel=0.5
+                            ),
+                            iaa.OneOf([
+                                iaa.Dropout((0.01, 0.1), per_channel=0.5),
+                                iaa.CoarseDropout(
+                                    (0.03, 0.15), size_percent=(0.02, 0.05),
+                                    per_channel=0.2
+                                ),
+                            ]),
+                            iaa.Invert(0.05, per_channel=True), # invert color channels
+                            iaa.Add((-10, 10), per_channel=0.5),
+                            iaa.Multiply((0.5, 1.5), per_channel=0.5),
+                            iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5),
+                            iaa.Grayscale(alpha=(0.0, 1.0)),
+                            sometimes(
+                                iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)
+                            ),
+                            sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05)))
+                        ],
+                        random_order=True
+                    )),
             ]),
         ],
         random_order=True
@@ -257,10 +337,17 @@ if __name__ == '__main__':
 
         print('dataset path', DATASET_PATH)
 
-        split_ratio = 0.2
+        split_ratio = 0.05
         SEED=222
-        train_datagen = ImageDataGenerator(rescale=1. / 255, validation_split=split_ratio,preprocessing_function = seq.augment_image) # set validation split
-        val_datagen = ImageDataGenerator(rescale=1. / 255, validation_split=split_ratio)
+
+        def aug_out_scale(img):
+            img = seq.augment_image(img)
+            img = img.astype('float32')
+            img /= 255.0
+            return img
+
+        train_datagen = ImageDataGenerator(validation_split=split_ratio,preprocessing_function = aug_out_scale) # set validation split
+        val_datagen = ImageDataGenerator(rescale=1. / 255.0, validation_split=split_ratio)
 
 
         train_generator = train_datagen.flow_from_directory(
@@ -284,8 +371,17 @@ if __name__ == '__main__':
             subset='validation') # set as training data
 
         """ Callback """
-        monitor = 'val_acc'
-        reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=3)
+        monitor = 'val_loss'
+        reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=4,factor=0.2,verbose=1)
+        early_stop = EarlyStopping(monitor=monitor, patience=7)
+        best_model_path = './best_model' + str(SEED) + '.h5'
+        checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
+        report = report_nsml(prefix = 'secls',seed = SEED)
+        callbacks = [reduce_lr,early_stop,checkpoint,report]
+
+        #""" Callback """
+        #monitor = 'val_acc'
+        #reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=3)
 
         """ Training loop """
         STEP_SIZE_TRAIN = train_generator.n // train_generator.batch_size
@@ -298,8 +394,9 @@ if __name__ == '__main__':
                                     validation_data = val_generator, 
                                     validation_steps = STEP_SIZE_VALID,
                                     epochs= 1,
-                                    callbacks=[reduce_lr],
+                                    callbacks=callbacks,
                                     verbose=1,
+                                    workers=4,
                                     shuffle=True)
 
         print('all layer train')
@@ -310,21 +407,13 @@ if __name__ == '__main__':
                       optimizer=opt,
                       metrics=['accuracy'])
 
-        for epoch in range(nb_epoch):
-            t1 = time.time()
-            res = model.fit_generator(generator=train_generator,
+        hist = model.fit_generator(generator=train_generator,
                                       steps_per_epoch=STEP_SIZE_TRAIN,
                                       validation_data = val_generator, 
                                       validation_steps = STEP_SIZE_VALID,
-                                      initial_epoch=epoch,
-                                      epochs=epoch + 1,
-                                      callbacks=[reduce_lr],
+                                      initial_epoch=1,
+                                      workers=4,
+                                      epochs=nb_epoch,
+                                      callbacks=callbacks,
                                       verbose=1,
                                       shuffle=True)
-            t2 = time.time()
-            print(res.history)
-            print('Training time for one epoch : %.1f' % ((t2 - t1)))
-            train_loss, train_acc, val_loss, val_acc = res.history['loss'][0], res.history['acc'][0],res.history['val_loss'][0], res.history['val_acc'][0]
-            nsml.report(summary=True, epoch=epoch, epoch_total=nb_epoch, loss=train_loss, acc=train_acc, val_loss=val_loss, val_acc=val_acc)
-            nsml.save(epoch)
-        print('Total training time : %.1f' % (time.time() - t0))

@@ -40,6 +40,7 @@ from keras import Model, Input
 from keras.layers import Layer, multiply, Lambda
 
 from sklearn.model_selection import train_test_split
+from sklearn.metrics.pairwise import euclidean_distances
 import imgaug as ia
 from imgaug import augmenters as iaa
 import random
@@ -227,6 +228,9 @@ def bind_model(model):
         print('cal_dot_complete sim matrix shape : ',sim_matrix.shape)
         indices = np.argsort(sim_matrix, axis=1)
         indices = np.flip(indices, axis=1)
+
+        euc_matrix = np.
+
         print('indices shape:',indices.shape)
         retrieval_results = {}
         print('queries length:',len(queries),'references length',len(references))

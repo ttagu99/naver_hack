@@ -20,7 +20,7 @@ import keras
 from keras.models import Sequential
 from keras.layers import Concatenate
 from keras.layers import Dense, Dropout, Flatten, Activation,Average
-from keras.layers import Conv2D, MaxPooling2D, GlobalAveragePooling2D, BatchNormalization,Input
+from keras.layers import Conv2D, MaxPooling2D, GlobalAveragePooling2D, BatchNormalization,Input, GlobalMaxPooling2D
 from keras.callbacks import ReduceLROnPlateau, EarlyStopping, ModelCheckpoint
 from keras import backend as K
 from data_loader import train_data_loader
@@ -39,7 +39,7 @@ from imgaug import augmenters as iaa
 import random
 from keras.utils.training_utils import multi_gpu_model
 from keras.preprocessing.image import ImageDataGenerator
-
+from sklearn.metrics.pairwise import euclidean_distances
 
 def get_tta_image(image, tta):
     images=[]
@@ -134,6 +134,12 @@ def bind_model(model):
         indices = np.argsort(sim_matrix, axis=1)
         indices = np.flip(indices, axis=1)
 
+        #euc_matrix = euclidean_distances(query_vecs,reference_vecs)
+        #euc_sim_matrix = 1 - euc_matrix
+        #sum_matrix = sim_matrix + euc_sim_matrix
+
+        indices = np.argsort(sim_matrix, axis=1)
+        indices = np.flip(indices, axis=1)
         retrieval_results = {}
 
         for (i, query) in enumerate(queries):
@@ -161,9 +167,18 @@ def get_feature(model, queries, db):
     img_size = (224, 224)
     batch_size = 200
     test_path = DATASET_PATH + '/test/test_data'
-
+    
+    #conv_last = model.get_layer('GAP_LAST').input
+    #gap = GlobalAveragePooling2D()(conv_last)
+    #gmp = GlobalMaxPooling2D()(conv_last)
+    #cont_gap_gmp = Concatenate()([gap,gmp])
+    #intermediate_layer_model = Model(inputs = model.input, outputs = cont_gap_gmp)
     intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)
     test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32')
+    test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.fliplr)
+    test_datagen_ud = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.flipud)
+    test_datagen_rot90 = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.rot90)
+
     query_generator = test_datagen.flow_from_directory(
         directory=test_path,
         target_size=img_size,
@@ -173,8 +188,39 @@ def get_feature(model, queries, db):
         class_mode=None,
         shuffle=False
     )
-    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator), verbose=1)
+    query_generator_lr = test_datagen_lr.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['query'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )
+    query_generator_ud = test_datagen_ud.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['query'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )
+    query_generator_rot90 = test_datagen_rot90.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['query'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )    
 
+    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),workers=4)
+    query_vecs_lr = intermediate_layer_model.predict_generator(query_generator_lr, steps=len(query_generator_lr),workers=4)
+    query_vecs_ud = intermediate_layer_model.predict_generator(query_generator_ud, steps=len(query_generator_ud),workers=4)
+    query_vecs_rot90 = intermediate_layer_model.predict_generator(query_generator_rot90, steps=len(query_generator_rot90),workers=4)
+    query_vecs = np.concatenate([query_vecs,query_vecs_lr,query_vecs_ud,query_vecs_rot90],axis=1)
     reference_generator = test_datagen.flow_from_directory(
         directory=test_path,
         target_size=img_size,
@@ -184,9 +230,39 @@ def get_feature(model, queries, db):
         class_mode=None,
         shuffle=False
     )
-    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),
-                                                                verbose=1)
-
+    reference_generator_lr = test_datagen_lr.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['reference'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )
+    reference_generator_ud = test_datagen_ud.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['reference'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )
+    reference_generator_rot90 = test_datagen_rot90.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['reference'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )
+    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
+    reference_vecs_lr = intermediate_layer_model.predict_generator(reference_generator_lr, steps=len(reference_generator_lr),workers=4)
+    reference_vecs_ud = intermediate_layer_model.predict_generator(reference_generator_ud, steps=len(reference_generator_ud),workers=4)
+    reference_vecs_rot90 = intermediate_layer_model.predict_generator(reference_generator_rot90, steps=len(reference_generator_rot90),workers=4)
+    
+    reference_vecs = np.concatenate([reference_vecs,reference_vecs_lr,reference_vecs_ud,reference_vecs_rot90],axis=1)
     return queries, query_vecs, db, reference_vecs
 
 def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1):
@@ -318,7 +394,7 @@ if __name__ == '__main__':
 
     NUM_GPU = 1
     SEL_CONF = 2
-    CV_NUM = 5
+    CV_NUM = 1
 
     CONF_LIST = []
     CONF_LIST.append({'name':'Xc', 'input_shape':(224, 224, 3), 'backbone':Xception
@@ -409,5 +485,5 @@ if __name__ == '__main__':
     if config.mode == 'train':
         bTrainmode = True
         #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
-        nsml.load(checkpoint='0', session='Zonber/ir_ph2/226') #InceptionResnetV2 222
-        nsml.save(0)  # this is display model name at lb
+        nsml.load(checkpoint='secls_222_27', session='Zonber/ir_ph2/299') #InceptionResnetV2 222
+        nsml.save('happy_new_year_adieu_2018')  # this is display model name at lb

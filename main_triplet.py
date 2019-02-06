@@ -53,36 +53,56 @@ class TripletLossLayer(Layer):
 	def __init__(self, **kwargs):
 		super(TripletLossLayer, self).__init__(**kwargs)
 
-	def neweuclidian_dist(self,y_true,y_pred):
-		return None
+	def euclidean_distance_loss(self, y_true, y_pred):
+		return K.sqrt(K.sum(K.square(y_pred - y_true), axis=-1))
+
+	def cosine_distance(self, y_true, y_pred):
+		# L2 normalize vectors before dot product
+		y_true = K.l2_normalize(y_true, axis=1)
+		y_pred = K.l2_normalize(y_pred, axis=1)
+		similarity = K.batch_dot(y_true, y_pred, axes=1)
+		distance = K.constant(1) - similarity
+		return K.squeeze(distance, axis=-1)
 
 	def newcos_similarity(self, y_true, y_pred):
-		y_true = K.l2_normalize(y_true,axis=1)
-		y_pred = K.l2_normalize(y_pred,axis=1)
+		y_true = K.l2_normalize(y_true,axis=-1)
+		y_pred = K.l2_normalize(y_pred,axis=-1)
 		mat_dot = K.dot(y_true,K.transpose(y_pred))
 		dp = tf.diag_part(mat_dot)
-		return K.mean(dp) +K.epsilon()
+		return K.sum(dp)+K.epsilon()
 
-	def triplet_loss(self, inputs):
+	def triplet_cos_sim_loss(self, inputs):
 		a, p, n = inputs
 		p_sim = self.newcos_similarity(a,p) # new cosine 0~1 upper is more similar
 		n_sim = self.newcos_similarity(a,n)
-		return n_sim/p_sim
+		return n_sim/p_sim#1.0 + n_sim - p_sim
+
+	def triplet_cos_dist_loss(self, inputs):
+		a, p, n = inputs
+		p_simdist = self.cosine_distance(a,p) # new cosine 0~1 upper is more similar
+		n_simdist = self.cosine_distance(a,n)
+		return 1.0 + K.mean(p_simdist -n_simdist)
+
+	def triplet_eclidian_loss(self, inputs):
+		a, p, n = inputs
+		p_euclid = self.euclidean_distance_loss(a,p) # new cosine 0~1 upper is more similar
+		n_euclid = self.euclidean_distance_loss(a,n)
+		return p_euclid/n_euclid
 
 	def triplet_mix_loss(self, inputs):
 		a, p, n,true_a,true_p,true_n, prd_a, prd_p, prd_n = inputs
-		p_sim = self.newcos_similarity(a,p) # new cosine 0~1 upper is more similar
-		n_sim = self.newcos_similarity(a,n)
+#		p_sim = self.newcos_similarity(a,p) # new cosine 0~1 upper is more similar
+#		n_sim = self.newcos_similarity(a,n)
 
 		## softmax loss add
 		cat_a = categorical_crossentropy(true_a,prd_a)
 		cat_p = categorical_crossentropy(true_p,prd_p)
 		cat_n = categorical_crossentropy(true_n,prd_n)
-
-		return n_sim/p_sim + K.mean(K.mean(cat_a)+K.mean(cat_p) + K.mean(cat_n))#p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
+		return K.mean(cat_a+cat_p+cat_n)#self.triplet_cos_sim_loss(inputs[:3])*0.2 + #p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
 
 	def call(self, inputs):
-		loss = self.triplet_loss(inputs)
+		loss = self.triplet_mix_loss(inputs)
+		#loss = self.triplet_eclidian_loss(inputs)
 		self.add_loss(loss)
 		return loss
 
@@ -92,6 +112,40 @@ def build_triple_base_model(backbone= None, input_shape =  (224,224,3), use_imag
     x = GlobalAveragePooling2D()(x)
     #x = Dense(256, activation='relu')(x)
     model = Model(inputs=base_model.input, outputs=x)
+    return model
+
+def build_triple_clsmix_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, opt = SGD(), base_freeze=True):
+    bs_model=build_triple_base_model(backbone= backbone, input_shape =  (224,224,3), use_imagenet =use_imagenet)
+    if base_freeze==True:
+        for layer in bs_model.layers:
+            layer.trainable = False
+
+    input_a=Input(shape=input_shape, name ='input_anchor')
+    input_p=Input(shape=input_shape, name ='input_pos')
+    input_n=Input(shape=input_shape, name ='input_neg')
+
+    ## label for dense softmax
+    input_label_a = Input(shape = (num_classes,),name = 'input_label_a')
+    input_label_p = Input(shape = (num_classes,),name = 'input_label_p')
+    input_label_n = Input(shape = (num_classes,),name = 'input_label_n')
+
+    embedding_a=bs_model(input_a)
+    embedding_p=bs_model(input_p)
+    embedding_n=bs_model(input_n)
+
+    ## dense softmax
+    cls_input = Input(shape=(1536,)) #IR gap 1536
+    cls_out = Dense(num_classes,activation='softmax',name='cls_last')(cls_input)
+    cls_model = Model(cls_input,cls_out)
+    
+    pred_label_anchor = cls_model(embedding_a)
+    pred_label_pos = cls_model(embedding_p)
+    pred_label_neg = cls_model(embedding_n)
+    triplet_loss_layer = TripletLossLayer(name='triplet_loss_layer')([embedding_a, embedding_p, embedding_n
+                                                                      , input_label_a, input_label_p, input_label_n
+                                                                      , pred_label_anchor, pred_label_pos,pred_label_neg])
+    model=Model([input_a,input_p,input_n,input_label_a,input_label_p,input_label_n],triplet_loss_layer)
+    model.compile(optimizer=opt,loss=None)
     return model
 
 def build_triple_mix_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, opt = SGD()):
@@ -205,13 +259,13 @@ def normal_input(img, mean_arr=None):
 def bind_model(model):
     def save(dir_name):
         os.makedirs(dir_name, exist_ok=True)
-        model.save(os.path.join(dir_name, 'model'))
-        #model.save_weights(os.path.join(dir_name, 'model'))
+        #model.save(os.path.join(dir_name, 'model'))
+        model.save_weights(os.path.join(dir_name, 'model'))
         print('model saved!')
 
     def load(file_path):
-        model = load_model(file_path)
-        #model.load_weights(file_path)
+        #model = load_model(file_path)
+        model.load_weights(file_path)
         print('model loaded!')
 
     def infer(queries, _):
@@ -432,8 +486,8 @@ class DataGenerator(keras.utils.Sequence):
         anchors_np = normal_inputs(anchors_np,self.mean)
         poss_np = normal_inputs(poss_np,self.mean)
         negas_np = normal_inputs(negas_np,self.mean)
-        return [anchors_np, poss_np, negas_np], None
-        #return [anchors_np, poss_np, negas_np,label_np_a,label_np_p,label_np_n], None
+        #return [anchors_np, poss_np, negas_np], None
+        return [anchors_np, poss_np, negas_np,label_np_a,label_np_p,label_np_n], None
 
     def set_label_imgs(self):
         self.imgs_per_label = {}
@@ -516,7 +570,7 @@ if __name__ == '__main__':
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':10, 'fc_train_epoch':2, 'imagenet':'imagenet'})
     CONF_LIST.append({'name':'SERES18', 'input_shape':(224, 224, 3), 'backbone':SEResNet18
                     , 'batch_size':80 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.00005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':5, 'fc_train_epoch':2, 'imagenet':'imagenet'})
+                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':15, 'fc_train_epoch':2, 'imagenet':'imagenet'})
     CONF_LIST.append({'name':'SEResNeXt50', 'input_shape':(224, 224, 3), 'backbone':SEResNeXt50
                 , 'batch_size':30 ,'fc_train_batch':520, 'SEED':111,'start_lr':0.00005
                 , 'finetune_layer':70, 'fine_batchmul':15,'epoch':40, 'fc_train_epoch':2, 'imagenet':'imagenet'})
@@ -540,7 +594,7 @@ if __name__ == '__main__':
     """ CV Model """
     opt = keras.optimizers.Adam(lr=start_lr)
     #model = build_triple_mix_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes,opt = opt)
-    model = build_triple_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes,opt = opt)
+    model = build_triple_clsmix_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes,opt = opt)
     bind_model(model)
     model.summary()
 
@@ -586,7 +640,7 @@ if __name__ == '__main__':
 
         opt = keras.optimizers.Adam(lr=start_lr)
         #model = build_triple_mix_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt)
-        model = build_triple_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt)
+        model = build_triple_clsmix_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt, base_freeze= True)
         #xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
         xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, labels, test_size=0.15, random_state=SEED,stratify=labels)
 
@@ -631,6 +685,12 @@ if __name__ == '__main__':
                
         train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
         val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False,mean = mean_arr)
+        #hist = model.fit_generator(train_gen, validation_data= val_gen, workers=4, use_multiprocessing=False
+        #            ,  epochs=1,  callbacks=callbacks,   verbose=1, shuffle=True)
+
+		# train all layer 
+        for layer in model.layers:
+            layer.trainable = True
 
         ##all train same val
         #train_gen = DataGenerator(x_train,input_shape, labels,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
@@ -645,5 +705,5 @@ if __name__ == '__main__':
     #if config.mode == 'train':
     #    bTrainmode = True
     #    #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
-    #    nsml.load(checkpoint='IR_222_5', session='Zonber/ir_ph2/197') #InceptionResnetV2 222
+    #    nsml.load(checkpoint='SERES18_111_1', session='Zonber/ir_ph2/248') #InceptionResnetV2 222
     #    nsml.save(0)  # this is display model name at lb
