@@ -103,9 +103,9 @@ def get_feature(model, queries, db):
     img_size = (224, 224)
     batch_size = 200
     test_path = DATASET_PATH + '/test/test_data'
-    intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('G_CON').output)
-    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32')
-    test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.fliplr)
+    intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)#('G_CON').output)
+    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
+    test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.fliplr, samplewise_center=True, samplewise_std_normalization=True)
 
     query_generator = test_datagen.flow_from_directory(
         directory=test_path,
@@ -159,15 +159,15 @@ def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imag
 
 
 
-    gap1 = GlobalAveragePooling2D(name='GAP_1')(base_model.layers[594].output)
-    gap2 = GlobalAveragePooling2D(name='GAP_2')(base_model.layers[260].output)
-    gap3 = GlobalAveragePooling2D(name='GAP_3')(base_model.layers[16].output)
-    gap4 = GlobalAveragePooling2D(name='GAP_4')(base_model.layers[9].output)
+    #gap1 = GlobalAveragePooling2D(name='GAP_1')(base_model.layers[594].output)
+    #gap2 = GlobalAveragePooling2D(name='GAP_2')(base_model.layers[260].output)
+    #gap3 = GlobalAveragePooling2D(name='GAP_3')(base_model.layers[16].output)
+    #gap4 = GlobalAveragePooling2D(name='GAP_4')(base_model.layers[9].output)
 
     gap = GlobalAveragePooling2D(name='GAP_LAST')(x)
     #gmp = GlobalMaxPooling2D(name='GMP_LAST')(x)
-    g_con = Concatenate(name='G_CON')([gap,gap1,gap2,gap3,gap4])
-    g_con = Dropout(rate=0.5)(g_con)
+    #g_con = Concatenate(name='G_CON')([gap,gap1,gap2,gap3,gap4])
+    g_con = Dropout(rate=0.5)(gap)#(g_con)
     predict = Dense(num_classes, activation='softmax', name='last_softmax')(g_con)
     model = Model(inputs=base_model.input, outputs=predict)
     if base_freeze==True:
@@ -346,8 +346,8 @@ if __name__ == '__main__':
             img /= 255.0
             return img
 
-        train_datagen = ImageDataGenerator(validation_split=split_ratio,preprocessing_function = aug_out_scale) # set validation split
-        val_datagen = ImageDataGenerator(rescale=1. / 255.0, validation_split=split_ratio)
+        train_datagen = ImageDataGenerator(validation_split=split_ratio,preprocessing_function = aug_out_scale, samplewise_center=True, samplewise_std_normalization=True) # set validation split
+        val_datagen = ImageDataGenerator(rescale=1. / 255.0, validation_split=split_ratio, samplewise_center=True, samplewise_std_normalization=True)
 
 
         train_generator = train_datagen.flow_from_directory(
