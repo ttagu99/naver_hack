@@ -168,11 +168,6 @@ def get_feature(model, queries, db):
     batch_size = 200
     test_path = DATASET_PATH + '/test/test_data'
     
-    #conv_last = model.get_layer('GAP_LAST').input
-    #gap = GlobalAveragePooling2D()(conv_last)
-    #gmp = GlobalMaxPooling2D()(conv_last)
-    #cont_gap_gmp = Concatenate()([gap,gmp])
-    #intermediate_layer_model = Model(inputs = model.input, outputs = cont_gap_gmp)
     intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)
     test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32')
     test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.fliplr)
@@ -265,19 +260,6 @@ def get_feature(model, queries, db):
     reference_vecs = np.concatenate([reference_vecs,reference_vecs_lr,reference_vecs_ud,reference_vecs_rot90],axis=1)
     return queries, query_vecs, db, reference_vecs
 
-def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1):
-    base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
-    x = base_model.output
-    x = GlobalAveragePooling2D(name='GAP_LAST')(x)
-    predict = Dense(num_classes, activation='softmax', name='last_softmax')(x)
-    model = Model(inputs=base_model.input, outputs=predict)
-    if base_freeze==True:
-        for layer in base_model.layers:
-            layer.trainable = False
-
-    model.compile(loss='categorical_crossentropy',   optimizer=opt,  metrics=['accuracy'])
-    return model
-
 # data preprocess
 def preprocess(queries, db):
     query_img = []
@@ -288,20 +270,35 @@ def preprocess(queries, db):
     reference_img = read_image_batch(db, img_size)
     return queries, query_img, db, reference_img
 
-def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1):
+def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1,use_gap_net=False):
     base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
     x = base_model.output
-    x = GlobalAveragePooling2D(name='GAP_LAST')(x)
-    predict = Dense(num_classes, activation='softmax', name='last_softmax')(x)
+    #x = Flatten(name='FLATTEN_LAST')(x)
+
+
+    if use_gap_net ==True:
+        #skip_connection_layers = (594, 260, 16, 9)
+        gap1 = GlobalAveragePooling2D(name='GAP_1')(base_model.layers[594].output)
+        gap2 = GlobalAveragePooling2D(name='GAP_2')(base_model.layers[260].output)
+        gap3 = GlobalAveragePooling2D(name='GAP_3')(base_model.layers[16].output)
+        gap4 = GlobalAveragePooling2D(name='GAP_4')(base_model.layers[9].output)
+        #gmp = GlobalMaxPooling2D(name='GMP_LAST')(x)
+        gap = GlobalAveragePooling2D(name='GAP_0')(x)
+        g_con = Concatenate(name='GAP_LAST')([gap,gap1,gap2,gap3,gap4])
+        g_con = Dropout(rate=0.5)(g_con)
+    else:
+        gap = GlobalAveragePooling2D(name='GAP_LAST')(x)
+        g_con = Dropout(rate=0.5)(gap)
+
+    predict = Dense(num_classes, activation='softmax', name='last_softmax')(g_con)
     model = Model(inputs=base_model.input, outputs=predict)
     if base_freeze==True:
         for layer in base_model.layers:
             layer.trainable = False
 
-    if NUM_GPU != 1:
-        model = keras.utils.multi_gpu_model(model, gpus=NUM_GPU)
     model.compile(loss='categorical_crossentropy',   optimizer=opt,  metrics=['accuracy'])
     return model
+
 
 def read_image(img_path,shape):
     img = cv2.imread(img_path, 1)
@@ -436,11 +433,12 @@ if __name__ == '__main__':
     use_imagenet = CONF_LIST[SEL_CONF]['imagenet']
 
     """ CV Model """
+    use_gap_net = False
     opt = keras.optimizers.Adam(lr=start_lr)
     if use_merge_bind == True:
         feature_models = []
         for cv in range(CV_NUM):
-            temp_model = build_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt)
+            temp_model = build_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt,use_gap_net=use_gap_net)
             feature_model = Model(inputs=temp_model.inputs,outputs = temp_model.layers[-2].output)
             feature_models.append(feature_model)
         model_input = Input(shape=input_shape)
@@ -448,7 +446,7 @@ if __name__ == '__main__':
         bind_model(en_model)
         en_model.summary()
     else:
-        model = build_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt)
+        model = build_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt,use_gap_net=use_gap_net)
         bind_model(model)
         model.summary()
 
@@ -485,5 +483,5 @@ if __name__ == '__main__':
     if config.mode == 'train':
         bTrainmode = True
         #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
-        nsml.load(checkpoint='secls_222_27', session='Zonber/ir_ph2/299') #InceptionResnetV2 222
-        nsml.save('happy_new_year_adieu_2018')  # this is display model name at lb
+        nsml.load(checkpoint='secls_222_20', session='Zonber/ir_ph2/312') #InceptionResnetV2 222
+        nsml.save('over_over_fitting')  # this is display model name at lb

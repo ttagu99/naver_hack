@@ -65,7 +65,7 @@ def bind_model(model):
         queries.sort()
         db.sort()
 
-        queries, query_vecs, references, reference_vecs = get_feature(model, queries, db)
+        queries, query_vecs, references, reference_vecs = get_feature(model, queries, db, (299,299))
 
         # l2 normalization
         query_vecs = l2_normalize(query_vecs)
@@ -99,11 +99,11 @@ def l2_normalize(v):
 
 
 # data preprocess
-def get_feature(model, queries, db):
-    img_size = (224, 224)
+def get_feature(model, queries, db, img_size):
+#    img_size = (224, 224)
     batch_size = 200
     test_path = DATASET_PATH + '/test/test_data'
-    intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)#('G_CON').output)
+    intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)
     test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
     test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.fliplr, samplewise_center=True, samplewise_std_normalization=True)
 
@@ -151,23 +151,26 @@ def get_feature(model, queries, db):
     reference_vecs = np.concatenate([reference_vecs,reference_vecs_lr],axis=1)
     return queries, query_vecs, db, reference_vecs
 
-def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1):
+def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1,use_gap_net=False):
     base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
     x = base_model.output
     #x = Flatten(name='FLATTEN_LAST')(x)
-    #skip_connection_layers = (594, 260, 16, 9)
 
 
+    if use_gap_net ==True:
+        #skip_connection_layers = (594, 260, 16, 9)
+        gap1 = GlobalAveragePooling2D(name='GAP_1')(base_model.layers[594].output)
+        gap2 = GlobalAveragePooling2D(name='GAP_2')(base_model.layers[260].output)
+        gap3 = GlobalAveragePooling2D(name='GAP_3')(base_model.layers[16].output)
+        gap4 = GlobalAveragePooling2D(name='GAP_4')(base_model.layers[9].output)
+        #gmp = GlobalMaxPooling2D(name='GMP_LAST')(x)
+        gap = GlobalAveragePooling2D(name='GAP_0')(x)
+        g_con = Concatenate(name='GAP_LAST')([gap,gap1,gap2,gap3,gap4])
+        g_con = Dropout(rate=0.5)(g_con)
+    else:
+        gap = GlobalAveragePooling2D(name='GAP_LAST')(x)
+        g_con = Dropout(rate=0.5)(gap)
 
-    #gap1 = GlobalAveragePooling2D(name='GAP_1')(base_model.layers[594].output)
-    #gap2 = GlobalAveragePooling2D(name='GAP_2')(base_model.layers[260].output)
-    #gap3 = GlobalAveragePooling2D(name='GAP_3')(base_model.layers[16].output)
-    #gap4 = GlobalAveragePooling2D(name='GAP_4')(base_model.layers[9].output)
-
-    gap = GlobalAveragePooling2D(name='GAP_LAST')(x)
-    #gmp = GlobalMaxPooling2D(name='GMP_LAST')(x)
-    #g_con = Concatenate(name='G_CON')([gap,gap1,gap2,gap3,gap4])
-    g_con = Dropout(rate=0.5)(gap)#(g_con)
     predict = Dense(num_classes, activation='softmax', name='last_softmax')(g_con)
     model = Model(inputs=base_model.input, outputs=predict)
     if base_freeze==True:
@@ -176,6 +179,7 @@ def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imag
 
     model.compile(loss='categorical_crossentropy',   optimizer=opt,  metrics=['accuracy'])
     return model
+
 
 class DataGenerator(keras.utils.Sequence):
     'Generates data for Keras'
@@ -236,7 +240,7 @@ if __name__ == '__main__':
 
     # hyperparameters
     args.add_argument('--epoch', type=int, default=50)
-    args.add_argument('--batch_size', type=int, default=100)
+    args.add_argument('--batch_size', type=int, default=60)
     args.add_argument('--num_classes', type=int, default=1383)
 
     # DONOTCHANGE: They are reserved for nsml
@@ -317,10 +321,10 @@ if __name__ == '__main__':
     nb_epoch = config.epoch
     batch_size = config.batch_size
     num_classes = config.num_classes
-    input_shape = (224, 224, 3)  # input image shape
-
+    input_shape = (299,299,3)#(224, 224, 3)  # input image shape
+    use_gap_net = False
     opt = keras.optimizers.Adam(lr=0.0005)
-    model = build_model(backbone= InceptionResNetV2, input_shape = input_shape, use_imagenet = 'imagenet', num_classes=num_classes, base_freeze=True, opt =opt)
+    model = build_model(backbone= InceptionResNetV2, input_shape = input_shape, use_imagenet = 'imagenet', num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
     bind_model(model)
 
     if config.pause:
