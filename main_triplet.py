@@ -91,14 +91,14 @@ class TripletLossLayer(Layer):
 
 	def triplet_mix_loss(self, inputs):
 		a, p, n,true_a,true_p,true_n, prd_a, prd_p, prd_n = inputs
-#		p_sim = self.newcos_similarity(a,p) # new cosine 0~1 upper is more similar
-#		n_sim = self.newcos_similarity(a,n)
+		p_sim = self.newcos_similarity(a,p) # new cosine 0~1 upper is more similar
+		n_sim = self.newcos_similarity(a,n)
 
 		## softmax loss add
 		cat_a = categorical_crossentropy(true_a,prd_a)
 		cat_p = categorical_crossentropy(true_p,prd_p)
 		cat_n = categorical_crossentropy(true_n,prd_n)
-		return K.mean(cat_a+cat_p+cat_n)#self.triplet_cos_sim_loss(inputs[:3])*0.2 + #p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
+		return p_sim/n_sim+K.mean(cat_a/cat_a.shape[0]+cat_p/cat_p.shape[0]+cat_n)#self.triplet_cos_sim_loss(inputs[:3])*0.2 + #p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
 
 	def call(self, inputs):
 		loss = self.triplet_mix_loss(inputs)
