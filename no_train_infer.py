@@ -1,25 +1,22 @@
 # -*- coding: utf_8 -*-
-
-
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-
 import os
-
-import cv2
 import argparse
-import pickle
+import time
 
 import nsml
 import numpy as np
 
 from nsml import DATASET_PATH
 import keras
-from keras.models import Sequential
-from keras.layers import Concatenate
-from keras.layers import Dense, Dropout, Flatten, Activation,Average
+from keras.models import Sequential, Model
+from keras.layers import Dense, Dropout, Flatten, Activation, Concatenate
+from keras.layers import Conv2D, MaxPooling2D
+from keras.callbacks import ReduceLROnPlateau
+from keras.preprocessing.image import ImageDataGenerator
 from keras.layers import Conv2D, MaxPooling2D, GlobalAveragePooling2D, BatchNormalization,Input, GlobalMaxPooling2D
 from keras.callbacks import ReduceLROnPlateau, EarlyStopping, ModelCheckpoint
 from keras import backend as K
@@ -31,77 +28,22 @@ from keras.applications.resnet50 import ResNet50
 from keras.applications.nasnet import NASNetLarge
 from keras.applications.mobilenetv2 import MobileNetV2
 from keras.applications.inception_resnet_v2 import InceptionResNetV2
+from classification_models.resnet import ResNet18, SEResNet18
+from classification_models.senet import SEResNeXt50
 from keras.models import Model,load_model
 from keras.optimizers import Adam, SGD
+from keras import Model, Input
+from keras.layers import Layer, multiply, Lambda
+from keras.utils import to_categorical
 from sklearn.model_selection import train_test_split
 import imgaug as ia
 from imgaug import augmenters as iaa
 import random
 from keras.utils.training_utils import multi_gpu_model
 from keras.preprocessing.image import ImageDataGenerator
-from sklearn.metrics.pairwise import euclidean_distances
-
-def get_tta_image(image, tta):
-    images=[]
-    temp = image
-    images.append(temp)
-    if tta ==2:
-        images.append(np.fliplr(temp))
-    elif tta ==4:
-        images.append(np.fliplr(temp))
-        for i in range(len(images)):
-            images.append(np.flipud(images[i]))
-    elif tta == 8:
-        for i in range(3):
-            temp = np.rot90(temp)
-            images.append(temp)
-        for i in range(len(images)):
-            images.append(np.fliplr(images[i])) 
-    else:
-        pass
-    return images
-
-def predict_tta_batch(model, imgs, tta=8, batch_size = 100, use_avg=False):
-    all_set_num = len(imgs)
-    tta_batch_num = batch_size*tta
-    outputs  = []
-    for start in range(0,all_set_num,tta_batch_num):
-        end = start+tta_batch_num
-        end = min(end, all_set_num)
-        cur_batch_imgs = imgs[start:end]
-
-        cur_batch_img_ttas= []
-        for img in cur_batch_imgs:
-            cur_batch_img_ttas += get_tta_image(img,tta)
-        cur_batch = np.array(cur_batch_img_ttas)
-        #print('cur_batch.shape',cur_batch.shape)
-        cur_output = model.predict(cur_batch)
-        #print('len cur_output',len(cur_output))
-        for tta_start in range(0,len(cur_output),tta):
-            tta_end = tta_start+tta
-            per_one_img_output = cur_output[tta_start:tta_end]
-            if use_avg ==False:
-                per_one_img_output = np.concatenate(per_one_img_output)
-            else:
-                per_one_img_output = np.average(per_one_img_output,axis=0)
-            outputs.append(per_one_img_output)
-    return outputs
-
-def normal_inputs(imgs, mean_arr=None):
-    if isinstance(imgs, (list,)):
-        results = []
-        for img in imgs:
-            results.append(normal_input(img,mean_arr))
-        return results
-    else:
-        return normal_input(imgs,mean_arr)
-
-def normal_input(img, mean_arr=None):
-    img = img.astype('float32')
-    img /= 255
-    #img -= mean_arr
-    return img
- 
+import pandas as pd
+import tensorflow as tf
+from keras.losses import categorical_crossentropy
 
 def bind_model(model):
     def save(dir_name):
@@ -123,7 +65,7 @@ def bind_model(model):
         queries.sort()
         db.sort()
 
-        queries, query_vecs, references, reference_vecs = get_feature(model, queries, db)
+        queries, query_vecs, references, reference_vecs = get_feature(model, queries, db, (299,299))
 
         # l2 normalization
         query_vecs = l2_normalize(query_vecs)
@@ -134,12 +76,6 @@ def bind_model(model):
         indices = np.argsort(sim_matrix, axis=1)
         indices = np.flip(indices, axis=1)
 
-        #euc_matrix = euclidean_distances(query_vecs,reference_vecs)
-        #euc_sim_matrix = 1 - euc_matrix
-        #sum_matrix = sim_matrix + euc_sim_matrix
-
-        indices = np.argsort(sim_matrix, axis=1)
-        indices = np.flip(indices, axis=1)
         retrieval_results = {}
 
         for (i, query) in enumerate(queries):
@@ -163,16 +99,13 @@ def l2_normalize(v):
 
 
 # data preprocess
-def get_feature(model, queries, db):
-    img_size = (224, 224)
+def get_feature(model, queries, db, img_size):
+#    img_size = (224, 224)
     batch_size = 200
     test_path = DATASET_PATH + '/test/test_data'
-    
     intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)
-    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32')
-    test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.fliplr)
-    test_datagen_ud = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.flipud)
-    test_datagen_rot90 = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.rot90)
+    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
+    test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.fliplr, samplewise_center=True, samplewise_std_normalization=True)
 
     query_generator = test_datagen.flow_from_directory(
         directory=test_path,
@@ -191,31 +124,10 @@ def get_feature(model, queries, db):
         batch_size=batch_size,
         class_mode=None,
         shuffle=False
-    )
-    query_generator_ud = test_datagen_ud.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['query'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )
-    query_generator_rot90 = test_datagen_rot90.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['query'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
     )    
-
     query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),workers=4)
     query_vecs_lr = intermediate_layer_model.predict_generator(query_generator_lr, steps=len(query_generator_lr),workers=4)
-    query_vecs_ud = intermediate_layer_model.predict_generator(query_generator_ud, steps=len(query_generator_ud),workers=4)
-    query_vecs_rot90 = intermediate_layer_model.predict_generator(query_generator_rot90, steps=len(query_generator_rot90),workers=4)
-    query_vecs = np.concatenate([query_vecs,query_vecs_lr,query_vecs_ud,query_vecs_rot90],axis=1)
+    query_vecs = np.concatenate([query_vecs,query_vecs_lr],axis=1)
     reference_generator = test_datagen.flow_from_directory(
         directory=test_path,
         target_size=img_size,
@@ -234,41 +146,10 @@ def get_feature(model, queries, db):
         class_mode=None,
         shuffle=False
     )
-    reference_generator_ud = test_datagen_ud.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['reference'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )
-    reference_generator_rot90 = test_datagen_rot90.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['reference'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )
     reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
     reference_vecs_lr = intermediate_layer_model.predict_generator(reference_generator_lr, steps=len(reference_generator_lr),workers=4)
-    reference_vecs_ud = intermediate_layer_model.predict_generator(reference_generator_ud, steps=len(reference_generator_ud),workers=4)
-    reference_vecs_rot90 = intermediate_layer_model.predict_generator(reference_generator_rot90, steps=len(reference_generator_rot90),workers=4)
-    
-    reference_vecs = np.concatenate([reference_vecs,reference_vecs_lr,reference_vecs_ud,reference_vecs_rot90],axis=1)
+    reference_vecs = np.concatenate([reference_vecs,reference_vecs_lr],axis=1)
     return queries, query_vecs, db, reference_vecs
-
-# data preprocess
-def preprocess(queries, db):
-    query_img = []
-    reference_img = []
-    img_size = (224, 224)
-
-    query_img = read_image_batch(queries,img_size)
-    reference_img = read_image_batch(db, img_size)
-    return queries, query_img, db, reference_img
 
 def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1,use_gap_net=False):
     base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
@@ -300,20 +181,6 @@ def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imag
     return model
 
 
-def read_image(img_path,shape):
-    img = cv2.imread(img_path, 1)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, shape)
-    return img
-
-def read_image_batch(image_paths, shape):
-    images = []
-    for img_path in image_paths:
-        img = read_image(img_path,shape)
-        images.append(img)
-    return images
-
-#why generator make low score when train by multi gpu  
 class DataGenerator(keras.utils.Sequence):
     'Generates data for Keras'
     def __init__(self, image_paths, input_shape, labels, batch_size, aug_seq, num_classes, use_aug = True, shuffle = True, mean=None):
@@ -359,122 +226,106 @@ class DataGenerator(keras.utils.Sequence):
         if self.shuffle == True:
             np.random.shuffle(self.indexes)
 
-def ensemble_feature_vec(models, model_input, num_classes):
-    yModels=[model(model_input) for model in models] 
-    yAvg=Concatenate()(yModels) 
-    yAvg = Dense(num_classes, activation='softmax', name='dummy_sf')(yAvg)
-    modelEns = Model(inputs=model_input, outputs=yAvg,    name='ensemble')  
-    return modelEns
-
 class report_nsml(keras.callbacks.Callback):
     def __init__(self, prefix, seed):
         'Initialization'
         self.prefix = prefix
         self.seed = seed
     def on_epoch_end(self, epoch, logs={}):
-        nsml.report(summary=True, epoch=epoch, loss=logs.get('loss'), acc=logs.get('acc'), val_loss=logs.get('val_loss'), val_acc=logs.get('val_acc'))
-        #nsml.save(self.prefix +'_'+ str(self.seed)+'_' +str(epoch))
+        nsml.report(summary=True, epoch=epoch, loss=logs.get('loss'), val_loss=logs.get('val_loss'),acc=logs.get('acc'),val_acc=logs.get('val_acc'))
+        nsml.save(self.prefix +'_'+ str(self.seed)+'_' +str(epoch))
 
 if __name__ == '__main__':
     args = argparse.ArgumentParser()
 
     # hyperparameters
-    args.add_argument('--epochs', type=int, default=200)
-    args.add_argument('--batch_size', type=int, default=100)
+    args.add_argument('--epoch', type=int, default=50)
+    args.add_argument('--batch_size', type=int, default=60)
+    args.add_argument('--num_classes', type=int, default=1383)
 
     # DONOTCHANGE: They are reserved for nsml
     args.add_argument('--mode', type=str, default='train', help='submit일때 해당값이 test로 설정됩니다.')
-    args.add_argument('--iteration', type=str, default='0', help='fork 명령어를 입력할때의 체크포인트로 설정됩니다. 체크포인트 옵션을 안주면 마지막 wall time 의 model 을 가져옵니다.')
+    args.add_argument('--iteration', type=str, default='0',
+                      help='fork 명령어를 입력할때의 체크포인트로 설정됩니다. 체크포인트 옵션을 안주면 마지막 wall time 의 model 을 가져옵니다.')
     args.add_argument('--pause', type=int, default=0, help='model 을 load 할때 1로 설정됩니다.')
-    args.add_argument('--g', type=int, default=0, help='gpu')
     config = args.parse_args()
 
-    NUM_GPU = 1
-    SEL_CONF = 2
-    CV_NUM = 1
-
-    CONF_LIST = []
-    CONF_LIST.append({'name':'Xc', 'input_shape':(224, 224, 3), 'backbone':Xception
-                    , 'batch_size':100 ,'fc_train_batch':330, 'SEED':111,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
-    CONF_LIST.append({'name':'Re50', 'input_shape':(224, 224, 3), 'backbone':ResNet50
-                    , 'batch_size':100 ,'fc_train_batch':260, 'SEED':111,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
-    CONF_LIST.append({'name':'TTM', 'input_shape':(224, 224, 3), 'backbone':InceptionResNetV2
-                    , 'batch_size':100 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':1, 'fc_train_epoch':1, 'imagenet':None})
-    CONF_LIST.append({'name':'IR', 'input_shape':(224, 224, 3), 'backbone':InceptionResNetV2
-                    , 'batch_size':100 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
-    CONF_LIST.append({'name':'NL', 'input_shape':(224, 224, 3), 'backbone':NASNetLarge
-                    , 'batch_size':48 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
-    CONF_LIST.append({'name':'De121', 'input_shape':(224, 224, 3), 'backbone':DenseNet121
-                    , 'batch_size':100 ,'fc_train_batch':260, 'SEED':111,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
-    CONF_LIST.append({'name':'De201', 'input_shape':(224, 224, 3), 'backbone':DenseNet201
-                    , 'batch_size':100 ,'fc_train_batch':260, 'SEED':111,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
-
+    sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+    lesssometimes = lambda aug: iaa.Sometimes(0.3, aug)
+    seq = iaa.Sequential(
+        [
+            iaa.SomeOf((0, 3),[
+            iaa.Fliplr(0.5), # horizontally flip 50% of all images
+            iaa.Flipud(0.2), # vertically flip 20% of all images
+            sometimes(iaa.CropAndPad(
+                percent=(-0.1, 0.2),
+                pad_mode=['reflect']
+            )),
+            sometimes( iaa.OneOf([
+                iaa.Affine(rotate=0),
+                iaa.Affine(rotate=90),
+                iaa.Affine(rotate=180),
+                iaa.Affine(rotate=270)
+            ])),
+            sometimes(iaa.Affine(
+                scale={"x": (0.7, 1.3), "y": (0.7, 1.3)}, 
+                translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
+                rotate=(-45, 45), # rotate by -45 to +45 degrees
+                shear=(-5, 5), 
+                order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
+                mode=['reflect'] 
+            )),
+            lesssometimes( iaa.SomeOf((0, 5),
+                        [
+                            iaa.OneOf([
+                                iaa.GaussianBlur((0, 3.0)),
+                                iaa.AverageBlur(k=(2, 7)),
+                                iaa.MedianBlur(k=(3, 5)),
+                            ]),
+                            iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)),
+                            iaa.Emboss(alpha=(0, 1.0), strength=(0, 2.0)),
+                            sometimes(iaa.OneOf([
+                                iaa.EdgeDetect(alpha=(0, 0.7)),
+                                iaa.DirectedEdgeDetect(
+                                    alpha=(0, 0.7), direction=(0.0, 1.0)
+                                ),
+                            ])),
+                            iaa.AdditiveGaussianNoise(
+                                loc=0, scale=(0.0, 0.05*255), per_channel=0.5
+                            ),
+                            iaa.OneOf([
+                                iaa.Dropout((0.01, 0.1), per_channel=0.5),
+                                iaa.CoarseDropout(
+                                    (0.03, 0.15), size_percent=(0.02, 0.05),
+                                    per_channel=0.2
+                                ),
+                            ]),
+                            iaa.Invert(0.05, per_channel=True), # invert color channels
+                            iaa.Add((-10, 10), per_channel=0.5),
+                            iaa.Multiply((0.5, 1.5), per_channel=0.5),
+                            iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5),
+                            iaa.Grayscale(alpha=(0.0, 1.0)),
+                            sometimes(
+                                iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)
+                            ),
+                            sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05)))
+                        ],
+                        random_order=True
+                    )),
+            ]),
+        ],
+        random_order=True
+    )
+    
     # training parameters
-    use_merge_bind = False
-    nb_epoch = CONF_LIST[SEL_CONF]['epoch']
-    fc_train_epoch = CONF_LIST[SEL_CONF]['fc_train_epoch']
-    fc_train_batch = CONF_LIST[SEL_CONF]['fc_train_batch']
-    fc_train_batch *= NUM_GPU
-    start_lr = CONF_LIST[SEL_CONF]['start_lr']
-    batch_size = CONF_LIST[SEL_CONF]['batch_size']
-    batch_size *= NUM_GPU
-    num_classes = 1383
-    input_shape = CONF_LIST[SEL_CONF]['input_shape']
-    SEED = CONF_LIST[SEL_CONF]['SEED']
-    backbone = CONF_LIST[SEL_CONF]['backbone']
-    prefix = CONF_LIST[SEL_CONF]['name']
-    use_imagenet = CONF_LIST[SEL_CONF]['imagenet']
-
-    """ CV Model """
+    nb_epoch = config.epoch
+    batch_size = config.batch_size
+    num_classes = config.num_classes
+    input_shape = (299,299,3)#(224, 224, 3)  # input image shape
     use_gap_net = False
-    opt = keras.optimizers.Adam(lr=start_lr)
-    if use_merge_bind == True:
-        feature_models = []
-        for cv in range(CV_NUM):
-            temp_model = build_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt,use_gap_net=use_gap_net)
-            feature_model = Model(inputs=temp_model.inputs,outputs = temp_model.layers[-2].output)
-            feature_models.append(feature_model)
-        model_input = Input(shape=input_shape)
-        en_model = ensemble_feature_vec(feature_models,model_input, num_classes)
-        bind_model(en_model)
-        en_model.summary()
-    else:
-        model = build_model(backbone= backbone, use_imagenet=None,input_shape = input_shape, num_classes=num_classes, base_freeze = True,opt = opt,use_gap_net=use_gap_net)
-        bind_model(model)
-        model.summary()
-
-    """ Load data """
-    print('dataset path', DATASET_PATH)
-    output_path = ['./img_list.pkl', './label_list.pkl']
-    train_dataset_path = DATASET_PATH + '/train/train_data'
-    if nsml.IS_ON_NSML:
-        # Caching file
-        nsml.cache(train_data_loader, data_path=train_dataset_path, img_size=input_shape[:2],
-                    output_path=output_path)
-    else:
-        # local에서 실험할경우 dataset의 local-path 를 입력해주세요.
-        train_data_loader(train_dataset_path, input_shape[:2], output_path=output_path)
-
-    with open(output_path[0], 'rb') as img_f:
-        img_list = pickle.load(img_f)
-    with open(output_path[1], 'rb') as label_f:
-        label_list = pickle.load(label_f)
-
-    mean_arr = None# np.zeros(input_shape)
-    #for img in img_list:
-    #    mean_arr += img.astype('float32')
-    #mean_arr /= len(img_list)
-    #print('mean shape:',mean_arr.shape, 'mean mean:',mean_arr.mean(), 'mean max:',mean_arr.max())
-    #mean_arr /= 255
-    #np.save('./mean.npy', mean_arr)
-
+    opt = keras.optimizers.Adam(lr=0.0005)
+    model = build_model(backbone= InceptionResNetV2, input_shape = input_shape, use_imagenet = 'imagenet', num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
+    bind_model(model)
 
     if config.pause:
         nsml.paused(scope=locals())
@@ -483,5 +334,5 @@ if __name__ == '__main__':
     if config.mode == 'train':
         bTrainmode = True
         #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
-        nsml.load(checkpoint='secls_222_20', session='Zonber/ir_ph2/312') #InceptionResnetV2 222
+        nsml.load(checkpoint='secls_222_27', session='Zonber/ir_ph2/314') #InceptionResnetV2 222
         nsml.save('over_over_fitting')  # this is display model name at lb

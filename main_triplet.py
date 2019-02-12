@@ -65,8 +65,8 @@ class TripletLossLayer(Layer):
 		return K.squeeze(distance, axis=-1)
 
 	def newcos_similarity(self, y_true, y_pred):
-		y_true = K.l2_normalize(y_true,axis=-1)
-		y_pred = K.l2_normalize(y_pred,axis=-1)
+		y_true = K.l2_normalize(y_true,axis=1)
+		y_pred = K.l2_normalize(y_pred,axis=1)
 		mat_dot = K.dot(y_true,K.transpose(y_pred))
 		dp = tf.diag_part(mat_dot)
 		return K.sum(dp)+K.epsilon()
@@ -98,7 +98,7 @@ class TripletLossLayer(Layer):
 		cat_a = categorical_crossentropy(true_a,prd_a)
 		cat_p = categorical_crossentropy(true_p,prd_p)
 		cat_n = categorical_crossentropy(true_n,prd_n)
-		return p_sim/n_sim+K.mean(cat_a/cat_a.shape[0]+cat_p/cat_p.shape[0]+cat_n)#self.triplet_cos_sim_loss(inputs[:3])*0.2 + #p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
+		return p_sim/n_sim+K.mean(cat_a/2+cat_p/2+cat_n)#self.triplet_cos_sim_loss(inputs[:3])*0.2 + #p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
 
 	def call(self, inputs):
 		loss = self.triplet_mix_loss(inputs)
@@ -110,12 +110,46 @@ def build_triple_base_model(backbone= None, input_shape =  (224,224,3), use_imag
     base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
     x = base_model.output
     x = GlobalAveragePooling2D()(x)
+    x = Dropout(rate=0.5)(x)
     #x = Dense(256, activation='relu')(x)
     model = Model(inputs=base_model.input, outputs=x)
     return model
 
-def build_triple_clsmix_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, opt = SGD(), base_freeze=True):
-    bs_model=build_triple_base_model(backbone= backbone, input_shape =  (224,224,3), use_imagenet =use_imagenet)
+def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1,use_gap_net=False):
+    base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
+    x = base_model.output
+    #x = Flatten(name='FLATTEN_LAST')(x)
+
+
+    if use_gap_net ==True:
+        #skip_connection_layers = (594, 260, 16, 9)
+        gap1 = GlobalAveragePooling2D(name='GAP_1')(base_model.layers[594].output)
+        gap2 = GlobalAveragePooling2D(name='GAP_2')(base_model.layers[260].output)
+        gap3 = GlobalAveragePooling2D(name='GAP_3')(base_model.layers[16].output)
+        gap4 = GlobalAveragePooling2D(name='GAP_4')(base_model.layers[9].output)
+        #gmp = GlobalMaxPooling2D(name='GMP_LAST')(x)
+        gap = GlobalAveragePooling2D(name='GAP_0')(x)
+        g_con = Concatenate(name='GAP_LAST')([gap,gap1,gap2,gap3,gap4])
+        g_con = Dropout(rate=0.5)(g_con)
+    else:
+        gap = GlobalAveragePooling2D(name='GAP_LAST')(x)
+        g_con = Dropout(rate=0.5)(gap)
+
+    predict = Dense(num_classes, activation='softmax', name='last_softmax')(g_con)
+    model = Model(inputs=base_model.input, outputs=predict)
+    if base_freeze==True:
+        for layer in base_model.layers:
+            layer.trainable = False
+
+    model.compile(loss='categorical_crossentropy',   optimizer=opt,  metrics=['accuracy'])
+    return model
+
+def build_triple_clsmix_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, opt = SGD(), base_freeze=True, cls_model=None):
+    if cls_model is not None:
+        bs_model = cls_model
+    else:
+        bs_model=build_triple_base_model(backbone= backbone, input_shape =  input_shape, use_imagenet =use_imagenet)
+
     if base_freeze==True:
         for layer in bs_model.layers:
             layer.trainable = False
@@ -270,32 +304,29 @@ def bind_model(model):
 
     def infer(queries, _):
         test_path = DATASET_PATH + '/test/test_data'
+
         db = [os.path.join(test_path, 'reference', path) for path in os.listdir(os.path.join(test_path, 'reference'))]
 
         queries = [v.split('/')[-1].split('.')[0] for v in queries]
         db = [v.split('/')[-1].split('.')[0] for v in db]
         queries.sort()
         db.sort()
-        print('infer start qeries length:',len(queries),'db length:',len(db))
 
-        queries, query_vecs, references, reference_vecs = get_feature(model, queries, db)
-        print('feature shape:',query_vecs.shape, reference_vecs.shape)
-        ## l2 normalization
+        queries, query_vecs, references, reference_vecs = get_feature(model, queries, db, (299,299))
+
+        # l2 normalization
         query_vecs = l2_normalize(query_vecs)
         reference_vecs = l2_normalize(reference_vecs)
-        print('l2 complete')
+
         # Calculate cosine similarity
         sim_matrix = np.dot(query_vecs, reference_vecs.T)
-        print('cal_dot_complete sim matrix shape : ',sim_matrix.shape)
         indices = np.argsort(sim_matrix, axis=1)
         indices = np.flip(indices, axis=1)
-        print('indices shape:',indices.shape)
+
         retrieval_results = {}
-        print('queries length:',len(queries),'references length',len(references))
+
         for (i, query) in enumerate(queries):
-            # print(indices[i].shape)
             ranked_list = [references[k] for k in indices[i]]
-            # print(i, query, ranked_list)
             ranked_list = ranked_list[:1000]
 
             retrieval_results[query] = ranked_list
@@ -306,13 +337,13 @@ def bind_model(model):
     # DONOTCHANGE: They are reserved for nsml
     nsml.bind(save=save, load=load, infer=infer)
 
-
-# data preprocess
-def get_feature(model, queries, db):
-    img_size = (224, 224)
+def get_feature(model, queries, db, img_size):
+#    img_size = (224, 224)
     batch_size = 200
     test_path = DATASET_PATH + '/test/test_data'
+    intermediate_layer_model = Model(inputs=model.input[0], outputs=model.get_layer('triplet_loss_layer').input[0])
     test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32')
+    test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.fliplr)
 
     query_generator = test_datagen.flow_from_directory(
         directory=test_path,
@@ -323,7 +354,18 @@ def get_feature(model, queries, db):
         class_mode=None,
         shuffle=False
     )
-
+    query_generator_lr = test_datagen_lr.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['query'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )    
+    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),workers=4)
+    query_vecs_lr = intermediate_layer_model.predict_generator(query_generator_lr, steps=len(query_generator_lr),workers=4)
+    query_vecs = np.concatenate([query_vecs,query_vecs_lr],axis=1)
     reference_generator = test_datagen.flow_from_directory(
         directory=test_path,
         target_size=img_size,
@@ -333,12 +375,18 @@ def get_feature(model, queries, db):
         class_mode=None,
         shuffle=False
     )
-
-    intermediate_layer_model = Model(inputs=model.input[0], outputs=model.get_layer('triplet_loss_layer').input[0])
-    intermediate_layer_model.summary()
-    print('quer_gen length:',len(query_generator), 'refer_gen length:',len(reference_generator))
-    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator), verbose=1)
-    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),verbose=1)
+    reference_generator_lr = test_datagen_lr.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['reference'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )
+    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
+    reference_vecs_lr = intermediate_layer_model.predict_generator(reference_generator_lr, steps=len(reference_generator_lr),workers=4)
+    reference_vecs = np.concatenate([reference_vecs,reference_vecs_lr],axis=1)
     return queries, query_vecs, db, reference_vecs
 
 # data preprocess
@@ -350,21 +398,6 @@ def preprocess(queries, db):
     query_img = read_image_batch(queries,img_size)
     reference_img = read_image_batch(db, img_size)
     return queries, query_img, db, reference_img
-
-def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1):
-    base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
-    x = base_model.output
-    x = GlobalAveragePooling2D()(x)
-    predict = Dense(num_classes, activation='softmax', name='last_softmax')(x)
-    model = Model(inputs=base_model.input, outputs=predict)
-    if base_freeze==True:
-        for layer in base_model.layers:
-            layer.trainable = False
-
-    if NUM_GPU != 1:
-        model = keras.utils.multi_gpu_model(model, gpus=NUM_GPU)
-    model.compile(loss='categorical_crossentropy',   optimizer=opt,  metrics=['accuracy'])
-    return model
 
 def read_image(img_path,shape=(224,224)):
     img = cv2.imread(img_path, 1)
@@ -550,9 +583,9 @@ if __name__ == '__main__':
     CONF_LIST.append({'name':'TTM', 'input_shape':(224, 224, 3), 'backbone':DenseNet121
                     , 'batch_size':30 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':1, 'fc_train_epoch':1, 'imagenet':None})
-    CONF_LIST.append({'name':'IR', 'input_shape':(224, 224, 3), 'backbone':InceptionResNetV2
-                    , 'batch_size':30 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
-                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':50, 'fc_train_epoch':10, 'imagenet':'imagenet'})
+    CONF_LIST.append({'name':'IR', 'input_shape':(299, 299, 3), 'backbone':InceptionResNetV2
+                    , 'batch_size':20 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
+                    , 'finetune_layer':70, 'fine_batchmul':15,'epoch':50, 'fc_train_epoch':10, 'imagenet':None})
     CONF_LIST.append({'name':'NL', 'input_shape':(224, 224, 3), 'backbone':NASNetLarge
                     , 'batch_size':48 ,'fc_train_batch':260, 'SEED':222,'start_lr':0.0005
                     , 'finetune_layer':70, 'fine_batchmul':15,'epoch':200, 'fc_train_epoch':10, 'imagenet':'imagenet'})
@@ -639,39 +672,87 @@ if __name__ == '__main__':
 
 
         opt = keras.optimizers.Adam(lr=start_lr)
+
+        use_gap_net = False
+        ############################
+        cls_model = build_model(backbone= InceptionResNetV2, input_shape = input_shape, use_imagenet =None, num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
+        bind_model(cls_model)
+        nsml.load(checkpoint='secls_222_27', session='Zonber/ir_ph2/314')
+        intermediate_layer_model = Model(inputs=cls_model.input, outputs=cls_model.get_layer('GAP_LAST').output)
+        ############################
+
         #model = build_triple_mix_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt)
-        model = build_triple_clsmix_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt, base_freeze= True)
+        model = build_triple_clsmix_model(backbone= backbone, use_imagenet=use_imagenet,input_shape = input_shape, num_classes=num_classes,opt = opt, base_freeze= True, cls_model=intermediate_layer_model)
+        bind_model(model)
         #xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, y_train, test_size=0.15, random_state=cur_seed,stratify=y_train)
-        xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, labels, test_size=0.15, random_state=SEED,stratify=labels)
+        xx_train, xx_val, yy_train, yy_val = train_test_split(x_train, labels, test_size=0.05, random_state=SEED,stratify=labels)
 
         print('shape:',xx_train.shape,'val shape:',xx_val.shape)
         sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+        lesssometimes = lambda aug: iaa.Sometimes(0.3, aug)
         seq = iaa.Sequential(
-            [
-                iaa.SomeOf((0, 3),[
-                iaa.Fliplr(0.5), # horizontally flip 50% of all images
-                iaa.Flipud(0.2), # vertically flip 20% of all images
-                sometimes(iaa.CropAndPad(
-                    percent=(-0.05, 0.1),
-                    pad_mode=['reflect']
-                )),
-                sometimes( iaa.OneOf([
-                    iaa.Affine(rotate=0),
-                    iaa.Affine(rotate=90),
-                    iaa.Affine(rotate=180),
-                    iaa.Affine(rotate=270)
-                ])),
-                sometimes(iaa.Affine(
-                    scale={"x": (0.1, 1.1), "y": (0.9, 1.1)}, 
-                    translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
-                    rotate=(-45, 45), # rotate by -45 to +45 degrees
-                    shear=(-5, 5), 
-                    order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
-                    mode=['reflect'] 
-                ))
-                ]),
-            ],
-            random_order=True
+	        [
+		        iaa.SomeOf((0, 3),[
+		        iaa.Fliplr(0.5), # horizontally flip 50% of all images
+		        iaa.Flipud(0.2), # vertically flip 20% of all images
+		        sometimes(iaa.CropAndPad(
+			        percent=(-0.1, 0.2),
+			        pad_mode=['reflect']
+		        )),
+		        sometimes( iaa.OneOf([
+			        iaa.Affine(rotate=0),
+			        iaa.Affine(rotate=90),
+			        iaa.Affine(rotate=180),
+			        iaa.Affine(rotate=270)
+		        ])),
+		        sometimes(iaa.Affine(
+			        scale={"x": (0.7, 1.3), "y": (0.7, 1.3)}, 
+			        translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)}, 
+			        rotate=(-45, 45), # rotate by -45 to +45 degrees
+			        shear=(-5, 5), 
+			        order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
+			        mode=['reflect'] 
+		        )),
+		        lesssometimes( iaa.SomeOf((0, 5),
+					        [
+						        iaa.OneOf([
+							        iaa.GaussianBlur((0, 3.0)),
+							        iaa.AverageBlur(k=(2, 7)),
+							        iaa.MedianBlur(k=(3, 5)),
+						        ]),
+						        iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)),
+						        iaa.Emboss(alpha=(0, 1.0), strength=(0, 2.0)),
+						        sometimes(iaa.OneOf([
+							        iaa.EdgeDetect(alpha=(0, 0.7)),
+							        iaa.DirectedEdgeDetect(
+								        alpha=(0, 0.7), direction=(0.0, 1.0)
+							        ),
+						        ])),
+						        iaa.AdditiveGaussianNoise(
+							        loc=0, scale=(0.0, 0.05*255), per_channel=0.5
+						        ),
+						        iaa.OneOf([
+							        iaa.Dropout((0.01, 0.1), per_channel=0.5),
+							        iaa.CoarseDropout(
+								        (0.03, 0.15), size_percent=(0.02, 0.05),
+								        per_channel=0.2
+							        ),
+						        ]),
+						        iaa.Invert(0.05, per_channel=True), # invert color channels
+						        iaa.Add((-10, 10), per_channel=0.5),
+						        iaa.Multiply((0.5, 1.5), per_channel=0.5),
+						        iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5),
+						        iaa.Grayscale(alpha=(0.0, 1.0)),
+						        sometimes(
+							        iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)
+						        ),
+						        sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05)))
+					        ],
+					        random_order=True
+				        )),
+		        ]),
+	        ],
+	        random_order=True
         )
 
         """ Callback """
@@ -682,28 +763,28 @@ if __name__ == '__main__':
         checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
         report = report_nsml(prefix = prefix,seed = SEED)
         callbacks = [reduce_lr,early_stop,checkpoint,report]
-               
+
         train_gen = DataGenerator(xx_train,input_shape, yy_train,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
         val_gen = DataGenerator(xx_val,input_shape, yy_val,batch_size,seq,num_classes,use_aug=False,shuffle=False,mean = mean_arr)
-        #hist = model.fit_generator(train_gen, validation_data= val_gen, workers=4, use_multiprocessing=False
-        #            ,  epochs=1,  callbacks=callbacks,   verbose=1, shuffle=True)
+        hist = model.fit_generator(train_gen, validation_data= val_gen, workers=4, use_multiprocessing=False
+                    ,  epochs=1,  callbacks=callbacks,   verbose=1, shuffle=True)
 
-		# train all layer 
+        # train all layer 
         for layer in model.layers:
             layer.trainable = True
 
         ##all train same val
         #train_gen = DataGenerator(x_train,input_shape, labels,batch_size,seq,num_classes,use_aug=True,shuffle=True,mean = mean_arr)
-        hist = model.fit_generator(train_gen, validation_data= val_gen, workers=4, use_multiprocessing=False
-                    ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
+        hist = model.fit_generator(train_gen, validation_data= val_gen, workers=4, use_multiprocessing=False,initial_epoch=1
+			        ,  epochs=nb_epoch,  callbacks=callbacks,   verbose=1, shuffle=True)
 
         #model.load_weights(best_model_path)
         #nsml.report(summary=True)
         #nsml.save(prefix +'BST')
 
-    #bTrainmode = False
-    #if config.mode == 'train':
-    #    bTrainmode = True
-    #    #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
-    #    nsml.load(checkpoint='SERES18_111_1', session='Zonber/ir_ph2/248') #InceptionResnetV2 222
-    #    nsml.save(0)  # this is display model name at lb
+        #bTrainmode = False
+        #if config.mode == 'train':
+        #    bTrainmode = True
+        #    #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
+        #    nsml.load(checkpoint='SERES18_111_1', session='Zonber/ir_ph2/248') #InceptionResnetV2 222
+        #    nsml.save(0)  # this is display model name at lb

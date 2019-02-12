@@ -1,5 +1,4 @@
-#nsml: nsml/ml:cuda9.0-cudnn7-tf-1.11torch0.4keras2.2
-
+#nsml: nsml/ml:cuda9.0-cudnn7-tf-1.11torch1.0keras2.2
 from distutils.core import setup
 
 setup(
@@ -8,9 +7,9 @@ setup(
     description='nsml vision hackathon',
     install_requires=[
         'scikit-learn',
-        'imgaug',
+        'imgaug==0.2.7',
         'image-classifiers',
         'pandas',
         'kito'
-    ]
+	    ]
 )
