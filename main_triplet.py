@@ -98,7 +98,7 @@ class TripletLossLayer(Layer):
 		cat_a = categorical_crossentropy(true_a,prd_a)
 		cat_p = categorical_crossentropy(true_p,prd_p)
 		cat_n = categorical_crossentropy(true_n,prd_n)
-		return p_sim/n_sim+K.mean(cat_a/2+cat_p/2+cat_n)#self.triplet_cos_sim_loss(inputs[:3])*0.2 + #p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
+		return n_sim/p_sim+K.mean(cat_a/2+cat_p/2+cat_n)#self.triplet_cos_sim_loss(inputs[:3])*0.2 + #p_dist*self.pos_r - n_dist*self.neg_r + self.neg_r
 
 	def call(self, inputs):
 		loss = self.triplet_mix_loss(inputs)
