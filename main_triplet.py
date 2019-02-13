@@ -65,8 +65,8 @@ class TripletLossLayer(Layer):
 		return K.squeeze(distance, axis=-1)
 
 	def newcos_similarity(self, y_true, y_pred):
-		y_true = K.l2_normalize(y_true,axis=1)
-		y_pred = K.l2_normalize(y_pred,axis=1)
+		y_true = K.l2_normalize(y_true,axis=0)
+		y_pred = K.l2_normalize(y_pred,axis=0)
 		mat_dot = K.dot(y_true,K.transpose(y_pred))
 		dp = tf.diag_part(mat_dot)
 		return K.sum(dp)+K.epsilon()
