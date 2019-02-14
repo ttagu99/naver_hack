@@ -161,12 +161,13 @@ def extractFeatures(imgs, model, RMAC, L, resolutionLevel, bBox=[], croppedActiv
 	return listData
 
 def extractRMAC(featuresList, model, RMAC, L, bBox=[], croppedActivations = False):
-	listData = []
-	for features in featuresList:
-		calculateMAC(features, listData)
-		if (RMAC):
-			calculateRMAC(features, listData, L)
-	return listData
+    listData = []
+    for features in featuresList:
+        print('features.shape', features.shape)
+        calculateMAC(features, listData)
+        if (RMAC):
+            calculateRMAC(features, listData, L)
+    return listData
 
 def learningPCA(listData):
 	fudge = 1E-18

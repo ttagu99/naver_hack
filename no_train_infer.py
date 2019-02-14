@@ -107,6 +107,7 @@ def get_feature(model, queries, db, img_size):
     print('pca model load complete')
 
     batch_size = 200
+    topResultsQE=5
     test_path = DATASET_PATH + '/test/test_data'
     intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)
     test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
@@ -135,6 +136,39 @@ def get_feature(model, queries, db, img_size):
     )
 
     reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
+
+
+    # ------------------ DB images: reading, descripting and whitening -----------------------
+    t1 = time.clock()
+    DbMAC = extractRMAC(reference_vecs, intermediate_layer_model, True, L)
+    print("PCA-whitening")
+    DbMAC = apply_whitening(DbMAC, Xm, W)
+    DbMAC = sumPooling(DbMAC, reference_vecs.shape[0], False)
+    Dbtime = time.clock() - t1
+    print('DbMAC.shape',DbMAC.shape)
+    print("RMAC and PCA-whitening of terminated in",round(Dbtime),"s")
+
+    # ------------------- query images: reading, descripting and whitening -----------------------
+    queryImages, bBox = readTest(dataset, full=True)
+    print('QUERY are ' + str(len(queryImages)) + ' images')
+
+    queryMAC = extractRMAC(query_vecs, intermediate_layer_model, True, L)
+    queryMAC = apply_whitening(queryMAC, Xm, W)
+    queryMAC = sumPooling(queryMAC, query_vecs.shape[0], False)
+    print('queryMAC.shape',queryMAC.shape)
+    print("Query descriptors saved!")
+
+    #retrieval1 = time.clock()
+    #finalReRank = retrieveQENEW(queryMAC, regions, topResultsQE,url, queryImages, DbImages, dataset)
+    #retrieval2 = time.clock() - retrieval1
+    #print("AVG query time:",round(retrieval2/len(queryImages),2),"s")
+
+    #retrieval1 = time.clock()
+    #finalReRank2 = retrieveQERegionsNEW(queryMAC, regions, topResultsQE, url,queryImages, DbImages, finalReRank, dataset)
+    #retrieval2 = time.clock() - retrieval1
+    #print("AVG query expansion time:",round(retrieval2/len(queryImages),2),"s")
+
+
     return queries, query_vecs, db, reference_vecs
 
 def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1,use_gap_net=False):
@@ -333,7 +367,7 @@ if __name__ == '__main__':
         datasetPCA =DATASET_PATH + '/train/train_data'
         pca_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
         pca_generator = pca_datagen.flow_from_directory(directory=datasetPCA, target_size=(input_shape[0],input_shape[1]),  color_mode="rgb",  batch_size=batch_size,  class_mode=None,  shuffle=True)
-        featuresList = intermediate_layer_model.predict_generator(pca_generator, steps=len(pca_generator),workers=4, verbose=1)
+        featuresList = intermediate_layer_model.predict_generator(pca_generator, steps=len(pca_generator)//10,workers=4, verbose=1)
         print('extract features complete:',featuresList.shape)
         PCAMAC = extractRMAC(featuresList, intermediate_layer_model, True, L)
         print('extract RMAC:',len(PCAMAC))
