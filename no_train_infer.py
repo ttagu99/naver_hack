@@ -44,6 +44,7 @@ from keras.preprocessing.image import ImageDataGenerator
 import pandas as pd
 import tensorflow as tf
 from keras.losses import categorical_crossentropy
+from utils import *
 
 def bind_model(model):
     def save(dir_name):
@@ -101,12 +102,15 @@ def l2_normalize(v):
 # data preprocess
 def get_feature(model, queries, db, img_size):
 #    img_size = (224, 224)
+    W = np.load('./Wpca.npy')
+    Xm = np.load('./Xmpca.npy')
+    print('pca model load complete')
+
     batch_size = 200
     test_path = DATASET_PATH + '/test/test_data'
     intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)
     test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
-    test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.fliplr, samplewise_center=True, samplewise_std_normalization=True)
-
+    
     query_generator = test_datagen.flow_from_directory(
         directory=test_path,
         target_size=img_size,
@@ -116,18 +120,10 @@ def get_feature(model, queries, db, img_size):
         class_mode=None,
         shuffle=False
     )
-    query_generator_lr = test_datagen_lr.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['query'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )    
+
+
+
     query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),workers=4)
-    query_vecs_lr = intermediate_layer_model.predict_generator(query_generator_lr, steps=len(query_generator_lr),workers=4)
-    query_vecs = np.concatenate([query_vecs,query_vecs_lr],axis=1)
     reference_generator = test_datagen.flow_from_directory(
         directory=test_path,
         target_size=img_size,
@@ -137,18 +133,8 @@ def get_feature(model, queries, db, img_size):
         class_mode=None,
         shuffle=False
     )
-    reference_generator_lr = test_datagen_lr.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['reference'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )
+
     reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
-    reference_vecs_lr = intermediate_layer_model.predict_generator(reference_generator_lr, steps=len(reference_generator_lr),workers=4)
-    reference_vecs = np.concatenate([reference_vecs,reference_vecs_lr],axis=1)
     return queries, query_vecs, db, reference_vecs
 
 def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1,use_gap_net=False):
@@ -324,7 +310,7 @@ if __name__ == '__main__':
     input_shape = (299,299,3)#(224, 224, 3)  # input image shape
     use_gap_net = False
     opt = keras.optimizers.Adam(lr=0.0005)
-    model = build_model(backbone= InceptionResNetV2, input_shape = input_shape, use_imagenet = 'imagenet', num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
+    model = build_model(backbone= InceptionResNetV2, input_shape = input_shape, use_imagenet = None, num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
     bind_model(model)
 
     if config.pause:
@@ -336,3 +322,22 @@ if __name__ == '__main__':
         #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
         nsml.load(checkpoint='secls_222_27', session='Zonber/ir_ph2/314') #InceptionResnetV2 222
         nsml.save('over_over_fitting')  # this is display model name at lb
+
+
+        ## vector PCA
+        resolutionLevel = 3
+        L=3
+        batch_size=200
+        intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').input)
+        intermediate_layer_model.summary()
+        datasetPCA =DATASET_PATH + '/train/train_data'
+        pca_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
+        pca_generator = pca_datagen.flow_from_directory(directory=datasetPCA, target_size=(input_shape[0],input_shape[1]),  color_mode="rgb",  batch_size=batch_size,  class_mode=None,  shuffle=True)
+        featuresList = intermediate_layer_model.predict_generator(pca_generator, steps=len(pca_generator),workers=4, verbose=1)
+        print('extract features complete:',featuresList.shape)
+        PCAMAC = extractRMAC(featuresList, intermediate_layer_model, True, L)
+        print('extract RMAC:',len(PCAMAC))
+        W, Xm = learningPCA(PCAMAC)
+        np.save('./Wpca.npy',W)
+        np.save('./Xmpca.npy',Xm)
+
