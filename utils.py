@@ -66,8 +66,8 @@ def readTest(dataset, full=False, debug=False):
 	return queryImages,bBox
 
 def calculateMAC(featureVector, listData): #max-pooling and l2-norm
-	rows = featureVector.shape[1] * featureVector.shape[2]
-	cols = featureVector.shape[3]
+	rows = featureVector.shape[0] * featureVector.shape[1]
+	cols = featureVector.shape[2]
 	features1 = np.reshape(featureVector, (rows, cols))
 	features2 = np.amax(features1, axis = 0)
 	features2 /= np.linalg.norm(features2, 2)
@@ -76,8 +76,8 @@ def calculateMAC(featureVector, listData): #max-pooling and l2-norm
 	return
 
 def calculateRMAC(features, listData, L):
-	W = features.shape[1]
-	H = features.shape[2]
+	W = features.shape[0]
+	H = features.shape[1]
 	# print("W",W,"H",H)
 
 	for l in range(1,L+1):
@@ -123,7 +123,7 @@ def calculateRMAC(features, listData, L):
 
 				# print(" X ",initialX,":", finalX," Y ", initialY,":", finalY)
 
-				featureRegion = features[:,initialX:finalX,initialY:finalY,:] #(old implementation)
+				featureRegion = features[initialX:finalX,initialY:finalY,:] #(old implementation)
 				calculateMAC(featureRegion, listData)
 	return
 

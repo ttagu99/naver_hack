@@ -169,7 +169,7 @@ def get_feature(model, queries, db, img_size):
     #print("AVG query expansion time:",round(retrieval2/len(queryImages),2),"s")
 
 
-    return queries, query_vecs, db, reference_vecs
+    return queries, queryMAC, db, DbMAC
 
 def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1,use_gap_net=False):
     base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
