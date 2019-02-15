@@ -20,7 +20,7 @@ from keras.preprocessing.image import ImageDataGenerator
 from keras.layers import Conv2D, MaxPooling2D, GlobalAveragePooling2D, BatchNormalization,Input, GlobalMaxPooling2D
 from keras.callbacks import ReduceLROnPlateau, EarlyStopping, ModelCheckpoint
 from keras import backend as K
-from data_loader import train_data_loader
+from data_loader import train_data_loader, pca_model_loader
 from keras.applications.xception import Xception
 from keras.applications.densenet import DenseNet121, DenseNet169, DenseNet201
 from keras.applications.nasnet import NASNetMobile
@@ -45,6 +45,9 @@ import pandas as pd
 import tensorflow as tf
 from keras.losses import categorical_crossentropy
 from utils import *
+import pickle
+pca_w = './Wpca.npy'
+pca_xm = './Xmpca.npy'
 
 def bind_model(model):
     def save(dir_name):
@@ -102,14 +105,13 @@ def l2_normalize(v):
 # data preprocess
 def get_feature(model, queries, db, img_size):
 #    img_size = (224, 224)
-    W = np.load('./Wpca.npy')
-    Xm = np.load('./Xmpca.npy')
-    print('pca model load complete')
+
 
     batch_size = 200
-    topResultsQE=5
+    #topResultsQE=5
+    L=3
     test_path = DATASET_PATH + '/test/test_data'
-    intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)
+    intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').input)
     test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
     
     query_generator = test_datagen.flow_from_directory(
@@ -141,22 +143,35 @@ def get_feature(model, queries, db, img_size):
     # ------------------ DB images: reading, descripting and whitening -----------------------
     t1 = time.clock()
     DbMAC = extractRMAC(reference_vecs, intermediate_layer_model, True, L)
-    print("PCA-whitening")
-    DbMAC = apply_whitening(DbMAC, Xm, W)
+    ## vector PCA
+    #print('start pca_model_loader')
+    #W, Xm = learningPCA(DbMAC)
+    #print('W shape:', W.shape, 'Xm shape:',Xm.shape)
+
+    #print("PCA-whitening")
+    #DbMAC = apply_whitening(DbMAC, Xm, W)
+    DbMAC = np.array(DbMAC)
     DbMAC = sumPooling(DbMAC, reference_vecs.shape[0], False)
     Dbtime = time.clock() - t1
-    print('DbMAC.shape',DbMAC.shape)
+    print('DbMAC lenght',len(DbMAC))
     print("RMAC and PCA-whitening of terminated in",round(Dbtime),"s")
 
     # ------------------- query images: reading, descripting and whitening -----------------------
-    queryImages, bBox = readTest(dataset, full=True)
-    print('QUERY are ' + str(len(queryImages)) + ' images')
-
+    t1 = time.clock()
     queryMAC = extractRMAC(query_vecs, intermediate_layer_model, True, L)
-    queryMAC = apply_whitening(queryMAC, Xm, W)
+    #print("PCA-whitening")
+    #queryMAC = apply_whitening(queryMAC, Xm, W)
+    queryMAC = np.array(queryMAC)
     queryMAC = sumPooling(queryMAC, query_vecs.shape[0], False)
-    print('queryMAC.shape',queryMAC.shape)
+    print('queryMAC lenght',len(queryMAC))
+    Dbtime = time.clock() - t1
     print("Query descriptors saved!")
+    print("queryMAC and PCA-whitening of terminated in",round(Dbtime),"s")
+
+    queryMAC = np.array(queryMAC)
+    DbMAC = np.array(DbMAC)
+    queryMAC = queryMAC.squeeze()
+    DbMAC = DbMAC.squeeze()
 
     #retrieval1 = time.clock()
     #finalReRank = retrieveQENEW(queryMAC, regions, topResultsQE,url, queryImages, DbImages, dataset)
@@ -353,25 +368,6 @@ if __name__ == '__main__':
     bTrainmode = False
     if config.mode == 'train':
         bTrainmode = True
-        #nsml.load(checkpoint='86', session='Zonber/ir_ph1_v2/204') #Nasnet Large 222
-        nsml.load(checkpoint='secls_222_27', session='Zonber/ir_ph2/314') #InceptionResnetV2 222
-        nsml.save('over_over_fitting')  # this is display model name at lb
 
-
-        ## vector PCA
-        resolutionLevel = 3
-        L=3
-        batch_size=200
-        intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').input)
-        intermediate_layer_model.summary()
-        datasetPCA =DATASET_PATH + '/train/train_data'
-        pca_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
-        pca_generator = pca_datagen.flow_from_directory(directory=datasetPCA, target_size=(input_shape[0],input_shape[1]),  color_mode="rgb",  batch_size=batch_size,  class_mode=None,  shuffle=True)
-        featuresList = intermediate_layer_model.predict_generator(pca_generator, steps=len(pca_generator)//10,workers=4, verbose=1)
-        print('extract features complete:',featuresList.shape)
-        PCAMAC = extractRMAC(featuresList, intermediate_layer_model, True, L)
-        print('extract RMAC:',len(PCAMAC))
-        W, Xm = learningPCA(PCAMAC)
-        np.save('./Wpca.npy',W)
-        np.save('./Xmpca.npy',Xm)
-
+    nsml.load(checkpoint='secls_222_27', session='Zonber/ir_ph2/314') #InceptionResnetV2 222
+    nsml.save('over_over_fitting')  # this is display model name at lb

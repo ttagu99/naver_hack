@@ -161,13 +161,16 @@ def extractFeatures(imgs, model, RMAC, L, resolutionLevel, bBox=[], croppedActiv
 	return listData
 
 def extractRMAC(featuresList, model, RMAC, L, bBox=[], croppedActivations = False):
-    listData = []
-    for features in featuresList:
-        print('features.shape', features.shape)
-        calculateMAC(features, listData)
-        if (RMAC):
-            calculateRMAC(features, listData, L)
-    return listData
+	t1 = time.clock()
+	listData = []
+	for features in featuresList:
+		calculateMAC(features, listData)
+		if (RMAC):
+			calculateRMAC(features, listData, L)
+			
+	tact_time = time.clock() - t1
+	print("RMAC tact time:",round(tact_time),"s")
+	return listData
 
 def learningPCA(listData):
 	fudge = 1E-18
@@ -178,8 +181,10 @@ def learningPCA(listData):
 	# calc covariance matrix
 	Xcov = np.dot(X.T,X)
 	d,V = np.linalg.eigh(Xcov)
+	print('d shape:',d.shape, 'V shape:',V.shape)
 	D = np.diag(1. / np.sqrt(d+fudge))
 	W = np.dot(np.dot(V, D), V.T)
+	print('learningPCA complete')
 	return W, mean
 
 def apply_whitening(listData, Xm, W) :
