@@ -155,8 +155,8 @@ def get_feature(model, queries, db, img_size):
     DbMAC = DbMAC.squeeze()
     
     # l2
-    queryMAC_sumpool = l2_normalize(queryMAC_sumpool)
-    DbMAC_sumpool = l2_normalize(DbMAC_sumpool)
+    #queryMAC_sumpool = l2_normalize(queryMAC_sumpool)
+    #DbMAC_sumpool = l2_normalize(DbMAC_sumpool)
     gap_query_vecs = l2_normalize(gap_query_vecs)
     gap_reference_vecs = l2_normalize(gap_reference_vecs)
 
@@ -184,9 +184,17 @@ def get_feature(model, queries, db, img_size):
     indices = np.argsort(sim_matrix, axis=1)
     indices = np.flip(indices, axis=1)
     print('indices.shape',indices.shape)
-    query_vecs_qe = []
-    for (i, query) in enumerate(query_vecs):
-        query_vecs_q
+    print('reference_vecs.shape',reference_vecs.shape)
+    for i in range(query_vecs.shape[0]):
+        for refidx in range(qe_number):
+            print('indices[refidx]',indices[i][refidx])
+            print('reference_vecs[indices[refidx]].shape',reference_vecs[indices[i][refidx]].shape)
+            print('indices[i][refidx]',indices[i][refidx])
+            query_vecs[i] += reference_vecs[indices[i][refidx]]
+        query_vecs[i] /= (qe_number+1)
+
+    # l2 normalization
+    query_vecs = l2_normalize(query_vecs)
 
     return queries, query_vecs, db, reference_vecs
 
