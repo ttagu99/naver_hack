@@ -279,13 +279,8 @@ def retrieve(queryMAC, DbMAC, topResultsQE, url, queryImages, DbImages, dataset,
 
 	return reRank
 
-def retrieveRegionsNEW(queryMAC, regions, topResultsQE,url, queryImages, DbImages, dataset, largeScaleRetrieval=False):
-
-	if (os.path.exists(url) and (dataset=='paris6k' or dataset=='oxford5k')):
-		shutil.rmtree(url)
-
+def retrieveRegionsNEW(queryMAC, regions, topResultsQE,url, DbImages, dataset, largeScaleRetrieval=False):
 	reRank = []
-
 	nRegions = regions.shape[0]//len(DbImages)
 	for i,q in enumerate(queryMAC,0):
 		distances = {}
@@ -302,11 +297,6 @@ def retrieveRegionsNEW(queryMAC, regions, topResultsQE,url, queryImages, DbImage
 				distances[indexDb] = [d,j]
 		finalDict = sorted(distances.items(), key=operator.itemgetter(1))
 		reRank.extend(list(finalDict)[:topResultsQE])
-
-		write_results(url, queryImages, i, finalDict, DbImages, dataset, largeScaleRetrieval)
-
-	calcResults(dataset, url)
-
 	return reRank
 
 def retrieveQE(queryMAC, DbMAC, topResultsQE, url, queryImages, DbImages, reRank, dataset, largeScaleRetrieval=False):

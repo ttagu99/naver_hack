@@ -29,7 +29,7 @@ from keras.applications.nasnet import NASNetLarge
 from keras.applications.mobilenetv2 import MobileNetV2
 from keras.applications.inception_resnet_v2 import InceptionResNetV2
 from classification_models.resnet import ResNet18, SEResNet18
-from classification_models.senet import SEResNeXt50
+from classification_models.senet import SEResNeXt50, SEResNeXt101
 from keras.models import Model,load_model
 from keras.optimizers import Adam, SGD
 from keras import Model, Input
@@ -44,6 +44,7 @@ from keras.preprocessing.image import ImageDataGenerator
 import pandas as pd
 import tensorflow as tf
 from keras.losses import categorical_crossentropy
+from se_inception_resnet_v2 import SEInceptionResNetV2
 
 def bind_model(model):
     def save(dir_name):
@@ -175,6 +176,9 @@ def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imag
     model = Model(inputs=base_model.input, outputs=predict)
     if base_freeze==True:
         for layer in base_model.layers:
+            if layer.name.find('squeeze') >0:
+                print('squeeze block frozen pass')
+                continue
             layer.trainable = False
 
     model.compile(loss='categorical_crossentropy',   optimizer=opt,  metrics=['accuracy'])
@@ -240,7 +244,7 @@ if __name__ == '__main__':
 
     # hyperparameters
     args.add_argument('--epoch', type=int, default=50)
-    args.add_argument('--batch_size', type=int, default=60)
+    args.add_argument('--batch_size', type=int, default=26)
     args.add_argument('--num_classes', type=int, default=1383)
 
     # DONOTCHANGE: They are reserved for nsml
@@ -319,12 +323,12 @@ if __name__ == '__main__':
     
     # training parameters
     nb_epoch = config.epoch
-    batch_size = config.batch_size
+    batch_size = config.batch_size  #inception resnetv2 299 60 , seresnext101 299 26
     num_classes = config.num_classes
     input_shape = (299,299,3)#(224, 224, 3)  # input image shape
     use_gap_net = False
     opt = keras.optimizers.Adam(lr=0.0005)
-    model = build_model(backbone= InceptionResNetV2, input_shape = input_shape, use_imagenet = 'imagenet', num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
+    model = build_model(backbone= SEResNeXt101, input_shape = input_shape, use_imagenet = 'imagenet', num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
     bind_model(model)
 
     if config.pause:

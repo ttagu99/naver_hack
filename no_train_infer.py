@@ -46,8 +46,7 @@ import tensorflow as tf
 from keras.losses import categorical_crossentropy
 from utils import *
 import pickle
-pca_w = './Wpca.npy'
-pca_xm = './Xmpca.npy'
+from sklearn.decomposition import PCA
 
 def bind_model(model):
     def save(dir_name):
@@ -71,9 +70,7 @@ def bind_model(model):
 
         queries, query_vecs, references, reference_vecs = get_feature(model, queries, db, (299,299))
 
-        # l2 normalization
-        query_vecs = l2_normalize(query_vecs)
-        reference_vecs = l2_normalize(reference_vecs)
+
 
         # Calculate cosine similarity
         sim_matrix = np.dot(query_vecs, reference_vecs.T)
@@ -111,7 +108,7 @@ def get_feature(model, queries, db, img_size):
     #topResultsQE=5
     L=3
     test_path = DATASET_PATH + '/test/test_data'
-    intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').input)
+    intermediate_layer_model = Model(inputs=model.input, outputs=[model.get_layer('GAP_LAST').input,model.get_layer('GAP_LAST').output])
     test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
     
     query_generator = test_datagen.flow_from_directory(
@@ -126,7 +123,7 @@ def get_feature(model, queries, db, img_size):
 
 
 
-    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),workers=4)
+    query_vecs, gap_query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),workers=4)
     reference_generator = test_datagen.flow_from_directory(
         directory=test_path,
         target_size=img_size,
@@ -137,54 +134,48 @@ def get_feature(model, queries, db, img_size):
         shuffle=False
     )
 
-    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
+    reference_vecs, gap_reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
 
 
     # ------------------ DB images: reading, descripting and whitening -----------------------
-    t1 = time.clock()
     DbMAC = extractRMAC(reference_vecs, intermediate_layer_model, True, L)
-    ## vector PCA
-    #print('start pca_model_loader')
-    #W, Xm = learningPCA(DbMAC)
-    #print('W shape:', W.shape, 'Xm shape:',Xm.shape)
-
-    #print("PCA-whitening")
-    #DbMAC = apply_whitening(DbMAC, Xm, W)
     DbMAC = np.array(DbMAC)
-    DbMAC = sumPooling(DbMAC, reference_vecs.shape[0], False)
-    Dbtime = time.clock() - t1
-    print('DbMAC lenght',len(DbMAC))
-    print("RMAC and PCA-whitening of terminated in",round(Dbtime),"s")
+    DbMAC_sumpool = sumPooling(DbMAC, reference_vecs.shape[0], False)
+    print('DbMAC_sumpool lenght',len(DbMAC_sumpool))
 
     # ------------------- query images: reading, descripting and whitening -----------------------
-    t1 = time.clock()
     queryMAC = extractRMAC(query_vecs, intermediate_layer_model, True, L)
-    #print("PCA-whitening")
-    #queryMAC = apply_whitening(queryMAC, Xm, W)
     queryMAC = np.array(queryMAC)
-    queryMAC = sumPooling(queryMAC, query_vecs.shape[0], False)
-    print('queryMAC lenght',len(queryMAC))
-    Dbtime = time.clock() - t1
-    print("Query descriptors saved!")
-    print("queryMAC and PCA-whitening of terminated in",round(Dbtime),"s")
+    queryMAC_sumpool = sumPooling(queryMAC, query_vecs.shape[0], False)
+    print('queryMAC_sumpool lenght',len(queryMAC_sumpool))
 
-    queryMAC = np.array(queryMAC)
+    queryMAC_sumpool = np.array(queryMAC_sumpool)
     DbMAC = np.array(DbMAC)
-    queryMAC = queryMAC.squeeze()
+    queryMAC_sumpool = queryMAC_sumpool.squeeze()
     DbMAC = DbMAC.squeeze()
+    
+    # l2
+    gap_query_vecs = l2_normalize(gap_query_vecs)
+    gap_reference_vecs = l2_normalize(gap_reference_vecs)
 
-    #retrieval1 = time.clock()
-    #finalReRank = retrieveQENEW(queryMAC, regions, topResultsQE,url, queryImages, DbImages, dataset)
-    #retrieval2 = time.clock() - retrieval1
-    #print("AVG query time:",round(retrieval2/len(queryImages),2),"s")
+    query_vecs = np.concatenate([queryMAC_sumpool,gap_query_vecs],axis=1)
+    reference_vecs = np.concatenate([DbMAC_sumpool, gap_reference_vecs],axis=1)
 
-    #retrieval1 = time.clock()
-    #finalReRank2 = retrieveQERegionsNEW(queryMAC, regions, topResultsQE, url,queryImages, DbImages, finalReRank, dataset)
-    #retrieval2 = time.clock() - retrieval1
-    #print("AVG query expansion time:",round(retrieval2/len(queryImages),2),"s")
+    # l2 normalization
+    query_vecs = l2_normalize(query_vecs)
+    reference_vecs = l2_normalize(reference_vecs)
 
+    # pca
+    all_vecs = np.concatenate([query_vecs, reference_vecs])
+    all_pca_vecs = PCA(1024).fit_transform(all_vecs)
+    query_vecs = all_pca_vecs[:query_vecs.shape[0],:]
+    reference_vecs = all_pca_vecs[query_vecs.shape[0]:,:]
 
-    return queries, queryMAC, db, DbMAC
+    # l2 normalization
+    query_vecs = l2_normalize(query_vecs)
+    reference_vecs = l2_normalize(reference_vecs)
+
+    return queries, query_vecs, db, reference_vecs
 
 def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1,use_gap_net=False):
     base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
