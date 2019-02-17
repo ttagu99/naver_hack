@@ -183,13 +183,10 @@ def get_feature(model, queries, db, img_size):
     sim_matrix = np.dot(query_vecs, reference_vecs.T)
     indices = np.argsort(sim_matrix, axis=1)
     indices = np.flip(indices, axis=1)
-
-    retrieval_results = {}
-
-    for (i, query) in enumerate(queries):
-        ranked_list = [references[k] for k in indices[i]]
-        ranked_list = ranked_list[:qe_number]
-        retrieval_results[query] = ranked_list
+    print('indices.shape',indices.shape)
+    query_vecs_qe = []
+    for (i, query) in enumerate(query_vecs):
+        query_vecs_q
 
     return queries, query_vecs, db, reference_vecs
 
