@@ -155,6 +155,8 @@ def get_feature(model, queries, db, img_size):
     DbMAC = DbMAC.squeeze()
     
     # l2
+    queryMAC_sumpool = l2_normalize(queryMAC_sumpool)
+    DbMAC_sumpool = l2_normalize(DbMAC_sumpool)
     gap_query_vecs = l2_normalize(gap_query_vecs)
     gap_reference_vecs = l2_normalize(gap_reference_vecs)
 
@@ -174,6 +176,20 @@ def get_feature(model, queries, db, img_size):
     # l2 normalization
     query_vecs = l2_normalize(query_vecs)
     reference_vecs = l2_normalize(reference_vecs)
+
+
+    # Calculate cosine similarity for QE
+    qe_number = 5
+    sim_matrix = np.dot(query_vecs, reference_vecs.T)
+    indices = np.argsort(sim_matrix, axis=1)
+    indices = np.flip(indices, axis=1)
+
+    retrieval_results = {}
+
+    for (i, query) in enumerate(queries):
+        ranked_list = [references[k] for k in indices[i]]
+        ranked_list = ranked_list[:qe_number]
+        retrieval_results[query] = ranked_list
 
     return queries, query_vecs, db, reference_vecs
 
