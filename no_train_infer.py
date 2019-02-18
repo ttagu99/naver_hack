@@ -68,14 +68,14 @@ def bind_model(model):
         queries.sort()
         db.sort()
 
-        queries, query_vecs, references, reference_vecs = get_feature(model, queries, db, (299,299))
+        queries, query_vecs, references, reference_vecs, indices = get_feature(model, queries, db, (299,299))
 
 
 
         # Calculate cosine similarity
-        sim_matrix = np.dot(query_vecs, reference_vecs.T)
-        indices = np.argsort(sim_matrix, axis=1)
-        indices = np.flip(indices, axis=1)
+        #sim_matrix = np.dot(query_vecs, reference_vecs.T)
+        #indices = np.argsort(sim_matrix, axis=1)
+        #indices = np.flip(indices, axis=1)
 
         retrieval_results = {}
 
@@ -152,7 +152,18 @@ def get_feature(model, queries, db, img_size):
     queryMAC_sumpool = np.array(queryMAC_sumpool)
     DbMAC = np.array(DbMAC)
     queryMAC_sumpool = queryMAC_sumpool.squeeze()
-    DbMAC = DbMAC.squeeze()
+
+ #   queryMAC = queryMAC.squeeze()
+ #   DbMAC = DbMAC.squeeze()
+ #   print('DbMAC.shape',DbMAC.shape)
+
+	## query regions - db regions l2_nor
+ #   queryMAC = l2_normalize(queryMAC)
+ #   DbMAC = l2_normalize(DbMAC)
+
+ #   # query regions - db regions simimlarity
+ #   all_qd_sim_matrix = np.dot(queryMAC, DbMAC.T)
+
     
     # l2
     #queryMAC_sumpool = l2_normalize(queryMAC_sumpool)
@@ -179,24 +190,45 @@ def get_feature(model, queries, db, img_size):
 
 
     # Calculate cosine similarity for QE
+    qe_iter = 1
     qe_number = 5
-    sim_matrix = np.dot(query_vecs, reference_vecs.T)
-    indices = np.argsort(sim_matrix, axis=1)
-    indices = np.flip(indices, axis=1)
-    print('indices.shape',indices.shape)
-    print('reference_vecs.shape',reference_vecs.shape)
-    for i in range(query_vecs.shape[0]):
-        for refidx in range(qe_number):
-            print('indices[refidx]',indices[i][refidx])
-            print('reference_vecs[indices[refidx]].shape',reference_vecs[indices[i][refidx]].shape)
-            print('indices[i][refidx]',indices[i][refidx])
-            query_vecs[i] += reference_vecs[indices[i][refidx]]
-        query_vecs[i] /= (qe_number+1)
+    weights = np.logspace(0, -1.5, (qe_number+1))
+    weights /= weights.sum()
+    for qe_idx in range(qe_iter):
+        pre_sim_matrix = np.dot(query_vecs, reference_vecs.T)
+        pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+        pre_indices = np.flip(pre_indices, axis=1) #higher first
+        for i in range(query_vecs.shape[0]):
+            query_vecs[i] *= weights[0]
+            for refidx in range(qe_number):
+                query_vecs[i] += reference_vecs[pre_indices[i][refidx]]*weights[refidx+1]
 
-    # l2 normalization
-    query_vecs = l2_normalize(query_vecs)
+        # after query expanstion l2 normalization
+        query_vecs = l2_normalize(query_vecs)
 
-    return queries, query_vecs, db, reference_vecs
+    # Calculate cosine similarity for DBA
+    dba_iter = 1
+    dba_number = 5
+    weights = np.logspace(0, -1.5, (dba_number+1))
+    weights /= weights.sum()
+    for dba_idx in range(dba_iter):
+        pre_sim_matrix = np.dot(reference_vecs, query_vecs.T)
+        pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+        pre_indices = np.flip(pre_indices, axis=1) #higher first
+        for i in range(reference_vecs.shape[0]):
+            reference_vecs[i] *= weights[0]
+            for refidx in range(dba_number):
+                reference_vecs[i] += query_vecs[pre_indices[i][refidx]]*weights[refidx+1]
+
+        # after database augment l2 normalization
+        reference_vecs = l2_normalize(reference_vecs)
+
+    # LAST Calculate cosine similarity
+    qe_sim_matrix = np.dot(query_vecs, reference_vecs.T)
+    qe_indices = np.argsort(qe_sim_matrix, axis=1)
+    qe_indices = np.flip(qe_indices, axis=1)
+
+    return queries, query_vecs, db, reference_vecs, qe_indices
 
 def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1,use_gap_net=False):
     base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)

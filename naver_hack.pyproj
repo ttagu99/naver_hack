@@ -5,7 +5,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>57866e60-d3db-462b-b935-cffe09a9a40a</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>main_triplet.py</StartupFile>
+    <StartupFile>submit.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -36,6 +36,9 @@
     <Compile Include="se.py" />
     <Compile Include="setup.py" />
     <Compile Include="se_inception_resnet_v2.py" />
+    <Compile Include="submit.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="utils.py" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />

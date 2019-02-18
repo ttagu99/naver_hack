@@ -174,13 +174,6 @@ def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imag
 
     predict = Dense(num_classes, activation='softmax', name='last_softmax')(g_con)
     model = Model(inputs=base_model.input, outputs=predict)
-    if base_freeze==True:
-        for layer in base_model.layers:
-            if layer.name.find('squeeze') >0:
-                print('squeeze block frozen pass')
-                continue
-            layer.trainable = False
-
     model.compile(loss='categorical_crossentropy',   optimizer=opt,  metrics=['accuracy'])
     return model
 
