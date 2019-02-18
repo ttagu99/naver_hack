@@ -188,10 +188,26 @@ def get_feature(model, queries, db, img_size):
     query_vecs = l2_normalize(query_vecs)
     reference_vecs = l2_normalize(reference_vecs)
 
+    # Calculate cosine similarity for DBA
+    dba_iter = 1
+    dba_number = 9
+    weights = np.logspace(0, -1.5, (dba_number+1))
+    weights /= weights.sum()
+    for dba_idx in range(dba_iter):
+        pre_sim_matrix = np.dot(reference_vecs, query_vecs.T)
+        pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+        pre_indices = np.flip(pre_indices, axis=1) #higher first
+        for i in range(reference_vecs.shape[0]):
+            reference_vecs[i] *= weights[0]
+            for refidx in range(dba_number):
+                reference_vecs[i] += query_vecs[pre_indices[i][refidx]]*weights[refidx+1]
+
+        # after database augment l2 normalization
+        reference_vecs = l2_normalize(reference_vecs)
 
     # Calculate cosine similarity for QE
     qe_iter = 1
-    qe_number = 5
+    qe_number = 19
     weights = np.logspace(0, -1.5, (qe_number+1))
     weights /= weights.sum()
     for qe_idx in range(qe_iter):
@@ -206,22 +222,7 @@ def get_feature(model, queries, db, img_size):
         # after query expanstion l2 normalization
         query_vecs = l2_normalize(query_vecs)
 
-    # Calculate cosine similarity for DBA
-    dba_iter = 1
-    dba_number = 5
-    weights = np.logspace(0, -1.5, (dba_number+1))
-    weights /= weights.sum()
-    for dba_idx in range(dba_iter):
-        pre_sim_matrix = np.dot(reference_vecs, query_vecs.T)
-        pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
-        pre_indices = np.flip(pre_indices, axis=1) #higher first
-        for i in range(reference_vecs.shape[0]):
-            reference_vecs[i] *= weights[0]
-            for refidx in range(dba_number):
-                reference_vecs[i] += query_vecs[pre_indices[i][refidx]]*weights[refidx+1]
 
-        # after database augment l2 normalization
-        reference_vecs = l2_normalize(reference_vecs)
 
     # LAST Calculate cosine similarity
     qe_sim_matrix = np.dot(query_vecs, reference_vecs.T)
