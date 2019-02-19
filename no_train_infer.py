@@ -29,7 +29,7 @@ from keras.applications.nasnet import NASNetLarge
 from keras.applications.mobilenetv2 import MobileNetV2
 from keras.applications.inception_resnet_v2 import InceptionResNetV2
 from classification_models.resnet import ResNet18, SEResNet18
-from classification_models.senet import SEResNeXt50
+from classification_models.senet import SEResNeXt50,SEResNeXt101
 from keras.models import Model,load_model
 from keras.optimizers import Adam, SGD
 from keras import Model, Input
@@ -149,21 +149,61 @@ def get_feature(model, queries, db, img_size):
     queryMAC_sumpool = sumPooling(queryMAC, query_vecs.shape[0], False)
     print('queryMAC_sumpool lenght',len(queryMAC_sumpool))
 
+    DbMAC_sumpool = np.array(DbMAC_sumpool)
+    DbMAC_sumpool = DbMAC_sumpool.squeeze()
     queryMAC_sumpool = np.array(queryMAC_sumpool)
-    DbMAC = np.array(DbMAC)
     queryMAC_sumpool = queryMAC_sumpool.squeeze()
 
+######################################
  #   queryMAC = queryMAC.squeeze()
  #   DbMAC = DbMAC.squeeze()
  #   print('DbMAC.shape',DbMAC.shape)
-
-	## query regions - db regions l2_nor
+	### query regions - db regions l2_nor
  #   queryMAC = l2_normalize(queryMAC)
  #   DbMAC = l2_normalize(DbMAC)
+ #   region_number = queryMAC.shape[0]//query_vecs.shape[0]
+ #   print('DbMAC.shape',DbMAC.shape, 'region number', region_number)
+ #   query_con_rmac = queryMAC.reshape((queryMAC.shape[0]//region_number, queryMAC.shape[1]*region_number))
+ #   db_con_rmac = DbMAC.reshape((DbMAC.shape[0]//region_number, DbMAC.shape[1]*region_number))
+ #   print('query_con_rmac.shape',query_con_rmac.shape,'db_con_rmac.shape',db_con_rmac.shape)
+ #    # pca decom_l2
+ #   all_vecs = np.concatenate([query_con_rmac, db_con_rmac])
+ #   print('pca rmac all')
+ #   all_pca_vecs = PCA(256).fit_transform(all_vecs)
+ #   print('pca rmac all l2')
+ #   all_pca_vecs = l2_normalize(all_pca_vecs)
+ #   print('query_con_rmac')
+ #   query_con_rmac = all_pca_vecs[:query_con_rmac.shape[0],:]
+ #   print('db_con_rmac')
+ #   db_con_rmac = all_pca_vecs[query_con_rmac.shape[0]:,:]
+ #   print('reshape concate per image', db_con_rmac.shape)
+ #######################################
 
- #   # query regions - db regions simimlarity
- #   all_qd_sim_matrix = np.dot(queryMAC, DbMAC.T)
+##   # query regions - db regions simimlarity
+#     # pca decom_l2
+#    all_vecs = np.concatenate([queryMAC, DbMAC])
+#    print('pca rmac all')
+#    all_pca_vecs = PCA(128).fit_transform(all_vecs)
+#    all_pca_vecs = l2_normalize(all_pca_vecs)
+#    queryMAC = all_pca_vecs[:queryMAC.shape[0],:]
+#    DbMAC = all_pca_vecs[queryMAC.shape[0]:,:]
+#    region_number = queryMAC.shape[0]//query_vecs.shape[0]
+#    print('DbMAC.shape',DbMAC.shape, 'region number', region_number)
+#    #concate
+#    query_con_rmac = queryMAC.reshape((queryMAC.shape[0]//region_number, queryMAC.shape[1]*region_number))
+#    db_con_rmac = DbMAC.reshape((DbMAC.shape[0]//region_number, DbMAC.shape[1]*region_number))
+#    query_con_rmac = l2_normalize(query_con_rmac)
+#    db_con_rmac = l2_normalize(db_con_rmac)
+#    print('reshape concate per image', db_con_rmac.shape)
 
+    # pca decom_l2
+    #all_vecs = np.concatenate([query_con_rmac, db_con_rmac])
+    #print('pca rmac all second')
+    #all_pca_vecs = PCA(256).fit_transform(all_vecs)
+    #all_pca_vecs = l2_normalize(all_pca_vecs)
+    #query_con_rmac = all_pca_vecs[:query_con_rmac.shape[0],:]
+    #db_con_rmac = all_pca_vecs[query_con_rmac.shape[0]:,:]
+######################################
     
     # l2
     #queryMAC_sumpool = l2_normalize(queryMAC_sumpool)
@@ -180,7 +220,7 @@ def get_feature(model, queries, db, img_size):
 
     # pca
     all_vecs = np.concatenate([query_vecs, reference_vecs])
-    all_pca_vecs = PCA(1024).fit_transform(all_vecs)
+    all_pca_vecs = PCA(786).fit_transform(all_vecs)
     query_vecs = all_pca_vecs[:query_vecs.shape[0],:]
     reference_vecs = all_pca_vecs[query_vecs.shape[0]:,:]
 
@@ -188,39 +228,37 @@ def get_feature(model, queries, db, img_size):
     query_vecs = l2_normalize(query_vecs)
     reference_vecs = l2_normalize(reference_vecs)
 
-    # Calculate cosine similarity for DBA
-    dba_iter = 1
-    dba_number = 9
-    weights = np.logspace(0, -1.5, (dba_number+1))
-    weights /= weights.sum()
-    for dba_idx in range(dba_iter):
-        pre_sim_matrix = np.dot(reference_vecs, query_vecs.T)
-        pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
-        pre_indices = np.flip(pre_indices, axis=1) #higher first
-        for i in range(reference_vecs.shape[0]):
-            reference_vecs[i] *= weights[0]
-            for refidx in range(dba_number):
-                reference_vecs[i] += query_vecs[pre_indices[i][refidx]]*weights[refidx+1]
-
-        # after database augment l2 normalization
-        reference_vecs = l2_normalize(reference_vecs)
-
     # Calculate cosine similarity for QE
     qe_iter = 1
     qe_number = 19
     weights = np.logspace(0, -1.5, (qe_number+1))
     weights /= weights.sum()
-    for qe_idx in range(qe_iter):
-        pre_sim_matrix = np.dot(query_vecs, reference_vecs.T)
-        pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
-        pre_indices = np.flip(pre_indices, axis=1) #higher first
-        for i in range(query_vecs.shape[0]):
-            query_vecs[i] *= weights[0]
-            for refidx in range(qe_number):
-                query_vecs[i] += reference_vecs[pre_indices[i][refidx]]*weights[refidx+1]
+    pre_sim_matrix = np.dot(query_vecs, reference_vecs.T)
+    pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+    pre_indices = np.flip(pre_indices, axis=1) #higher first
+    for i in range(query_vecs.shape[0]):
+        query_vecs[i] *= weights[0]
+        for refidx in range(qe_number):
+            query_vecs[i] += reference_vecs[pre_indices[i][refidx]]*weights[refidx+1]
 
-        # after query expanstion l2 normalization
-        query_vecs = l2_normalize(query_vecs)
+    # after query expanstion l2 normalization
+    query_vecs = l2_normalize(query_vecs)
+
+    # Calculate cosine similarity for DBA
+    dba_iter = 1
+    dba_number = 9
+    weights = np.logspace(0, -1.5, (dba_number+1))
+    weights /= weights.sum()
+    pre_sim_matrix = np.dot(reference_vecs, query_vecs.T)
+    pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+    pre_indices = np.flip(pre_indices, axis=1) #higher first
+    for i in range(reference_vecs.shape[0]):
+        reference_vecs[i] *= weights[0]
+        for refidx in range(dba_number):
+            reference_vecs[i] += query_vecs[pre_indices[i][refidx]]*weights[refidx+1]
+
+    # after database augment l2 normalization
+    reference_vecs = l2_normalize(reference_vecs)
 
 
 
