@@ -318,10 +318,10 @@ if __name__ == '__main__':
     nb_epoch = config.epoch
     batch_size = config.batch_size  #inception resnetv2 299 60 , seresnext101 299 26
     num_classes = config.num_classes
-    input_shape = (299,299,3)#(224, 224, 3)  # input image shape
+    input_shape = (333,333,3)#(299,299,3)#(224, 224, 3)  # input image shape
     use_gap_net = False
     opt = keras.optimizers.Adam(lr=0.0005)
-    model = build_model(backbone= SEResNeXt101, input_shape = input_shape, use_imagenet = 'imagenet', num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
+    model = build_model(backbone= InceptionResNetV2, input_shape = input_shape, use_imagenet = None, num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
     bind_model(model)
 
     if config.pause:
@@ -347,9 +347,8 @@ if __name__ == '__main__':
             img /= 255.0
             return img
 
-        train_datagen = ImageDataGenerator(validation_split=split_ratio,preprocessing_function = aug_out_scale, samplewise_center=True, samplewise_std_normalization=True) # set validation split
-        val_datagen = ImageDataGenerator(rescale=1. / 255.0, validation_split=split_ratio, samplewise_center=True, samplewise_std_normalization=True)
-
+        train_datagen = ImageDataGenerator(validation_split=split_ratio,preprocessing_function = aug_out_scale) # set validation split
+        val_datagen = ImageDataGenerator(rescale=1. / 255.0, validation_split=split_ratio)
 
         train_generator = train_datagen.flow_from_directory(
             directory=DATASET_PATH + '/train/train_data',
@@ -360,7 +359,7 @@ if __name__ == '__main__':
             shuffle=True,
             seed=SEED,
             subset='training') # set as training data
-        
+
         val_generator = val_datagen.flow_from_directory(
             directory=DATASET_PATH + '/train/train_data',
             target_size=input_shape[:2],
@@ -388,21 +387,22 @@ if __name__ == '__main__':
         STEP_SIZE_TRAIN = train_generator.n // train_generator.batch_size
         STEP_SIZE_VALID = val_generator.n // val_generator.batch_size
         t0 = time.time()
-
-        print('last layer train')
-        res = model.fit_generator(generator=train_generator,
-                                    steps_per_epoch=STEP_SIZE_TRAIN,
-                                    validation_data = val_generator, 
-                                    validation_steps = STEP_SIZE_VALID,
-                                    epochs= 1,
-                                    callbacks=callbacks,
-                                    verbose=1,
-                                    workers=4,
-                                    shuffle=True)
+        nsml.load(checkpoint='secls_222_27', session='Zonber/ir_ph2/314') #InceptionResnetV2 222
+        #print('last layer train')
+        #res = model.fit_generator(generator=train_generator,
+        #                            steps_per_epoch=STEP_SIZE_TRAIN,
+        #                            validation_data = val_generator, 
+        #                            validation_steps = STEP_SIZE_VALID,
+        #                            epochs= 1,
+        #                            callbacks=callbacks,
+        #                            verbose=1,
+        #                            workers=4,
+        #                            shuffle=True)
 
         print('all layer train')
         for layer in model.layers:
             layer.trainable=True
+
 
         model.compile(loss='categorical_crossentropy',
                       optimizer=opt,
@@ -412,7 +412,7 @@ if __name__ == '__main__':
                                       steps_per_epoch=STEP_SIZE_TRAIN,
                                       validation_data = val_generator, 
                                       validation_steps = STEP_SIZE_VALID,
-                                      initial_epoch=1,
+                                      initial_epoch=0,
                                       workers=4,
                                       epochs=nb_epoch,
                                       callbacks=callbacks,
