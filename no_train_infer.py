@@ -454,6 +454,6 @@ if __name__ == '__main__':
 
     #nsml.load(checkpoint='secls_222_27', session='Zonber/ir_ph2/314') #InceptionResnetV2 222
     #nsml.save('over_over_fitting')  # this is display model name at lb
-    for i in range(8,17):
+    for i in range(14,23):
         nsml.load(checkpoint='secls_222_'+str(i), session='Zonber/ir_ph2/450')
         nsml.save('secls_222_'+str(i))
