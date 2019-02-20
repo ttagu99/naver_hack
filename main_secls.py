@@ -66,16 +66,14 @@ def bind_model(model):
         queries.sort()
         db.sort()
 
-        queries, query_vecs, references, reference_vecs = get_feature(model, queries, db, (299,299))
+        queries, query_vecs, references, reference_vecs, indices = get_feature(model, queries, db, (333,333))
 
-        # l2 normalization
-        query_vecs = l2_normalize(query_vecs)
-        reference_vecs = l2_normalize(reference_vecs)
+
 
         # Calculate cosine similarity
-        sim_matrix = np.dot(query_vecs, reference_vecs.T)
-        indices = np.argsort(sim_matrix, axis=1)
-        indices = np.flip(indices, axis=1)
+        #sim_matrix = np.dot(query_vecs, reference_vecs.T)
+        #indices = np.argsort(sim_matrix, axis=1)
+        #indices = np.flip(indices, axis=1)
 
         retrieval_results = {}
 
@@ -102,12 +100,15 @@ def l2_normalize(v):
 # data preprocess
 def get_feature(model, queries, db, img_size):
 #    img_size = (224, 224)
-    batch_size = 200
-    test_path = DATASET_PATH + '/test/test_data'
-    intermediate_layer_model = Model(inputs=model.input, outputs=model.get_layer('GAP_LAST').output)
-    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
-    test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', preprocessing_function = np.fliplr, samplewise_center=True, samplewise_std_normalization=True)
 
+
+    batch_size = 200
+    #topResultsQE=5
+    L=3
+    test_path = DATASET_PATH + '/test/test_data'
+    intermediate_layer_model = Model(inputs=model.input, outputs=[model.get_layer('GAP_LAST').input,model.get_layer('GAP_LAST').output])
+    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
+    
     query_generator = test_datagen.flow_from_directory(
         directory=test_path,
         target_size=img_size,
@@ -117,18 +118,10 @@ def get_feature(model, queries, db, img_size):
         class_mode=None,
         shuffle=False
     )
-    query_generator_lr = test_datagen_lr.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['query'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )    
-    query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),workers=4)
-    query_vecs_lr = intermediate_layer_model.predict_generator(query_generator_lr, steps=len(query_generator_lr),workers=4)
-    query_vecs = np.concatenate([query_vecs,query_vecs_lr],axis=1)
+
+
+
+    query_vecs, gap_query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),workers=4)
     reference_generator = test_datagen.flow_from_directory(
         directory=test_path,
         target_size=img_size,
@@ -138,19 +131,141 @@ def get_feature(model, queries, db, img_size):
         class_mode=None,
         shuffle=False
     )
-    reference_generator_lr = test_datagen_lr.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['reference'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )
-    reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
-    reference_vecs_lr = intermediate_layer_model.predict_generator(reference_generator_lr, steps=len(reference_generator_lr),workers=4)
-    reference_vecs = np.concatenate([reference_vecs,reference_vecs_lr],axis=1)
-    return queries, query_vecs, db, reference_vecs
+
+    reference_vecs, gap_reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
+
+
+    # ------------------ DB images: reading, descripting and whitening -----------------------
+    DbMAC = extractRMAC(reference_vecs, intermediate_layer_model, True, L)
+    DbMAC = np.array(DbMAC)
+    DbMAC_sumpool = sumPooling(DbMAC, reference_vecs.shape[0], False)
+    print('DbMAC_sumpool lenght',len(DbMAC_sumpool))
+
+    # ------------------- query images: reading, descripting and whitening -----------------------
+    queryMAC = extractRMAC(query_vecs, intermediate_layer_model, True, L)
+    queryMAC = np.array(queryMAC)
+    queryMAC_sumpool = sumPooling(queryMAC, query_vecs.shape[0], False)
+    print('queryMAC_sumpool lenght',len(queryMAC_sumpool))
+
+    DbMAC_sumpool = np.array(DbMAC_sumpool)
+    DbMAC_sumpool = DbMAC_sumpool.squeeze()
+    queryMAC_sumpool = np.array(queryMAC_sumpool)
+    queryMAC_sumpool = queryMAC_sumpool.squeeze()
+
+######################################
+ #   queryMAC = queryMAC.squeeze()
+ #   DbMAC = DbMAC.squeeze()
+ #   print('DbMAC.shape',DbMAC.shape)
+	### query regions - db regions l2_nor
+ #   queryMAC = l2_normalize(queryMAC)
+ #   DbMAC = l2_normalize(DbMAC)
+ #   region_number = queryMAC.shape[0]//query_vecs.shape[0]
+ #   print('DbMAC.shape',DbMAC.shape, 'region number', region_number)
+ #   query_con_rmac = queryMAC.reshape((queryMAC.shape[0]//region_number, queryMAC.shape[1]*region_number))
+ #   db_con_rmac = DbMAC.reshape((DbMAC.shape[0]//region_number, DbMAC.shape[1]*region_number))
+ #   print('query_con_rmac.shape',query_con_rmac.shape,'db_con_rmac.shape',db_con_rmac.shape)
+ #    # pca decom_l2
+ #   all_vecs = np.concatenate([query_con_rmac, db_con_rmac])
+ #   print('pca rmac all')
+ #   all_pca_vecs = PCA(256).fit_transform(all_vecs)
+ #   print('pca rmac all l2')
+ #   all_pca_vecs = l2_normalize(all_pca_vecs)
+ #   print('query_con_rmac')
+ #   query_con_rmac = all_pca_vecs[:query_con_rmac.shape[0],:]
+ #   print('db_con_rmac')
+ #   db_con_rmac = all_pca_vecs[query_con_rmac.shape[0]:,:]
+ #   print('reshape concate per image', db_con_rmac.shape)
+ #######################################
+
+##   # query regions - db regions simimlarity
+#     # pca decom_l2
+#    all_vecs = np.concatenate([queryMAC, DbMAC])
+#    print('pca rmac all')
+#    all_pca_vecs = PCA(128).fit_transform(all_vecs)
+#    all_pca_vecs = l2_normalize(all_pca_vecs)
+#    queryMAC = all_pca_vecs[:queryMAC.shape[0],:]
+#    DbMAC = all_pca_vecs[queryMAC.shape[0]:,:]
+#    region_number = queryMAC.shape[0]//query_vecs.shape[0]
+#    print('DbMAC.shape',DbMAC.shape, 'region number', region_number)
+#    #concate
+#    query_con_rmac = queryMAC.reshape((queryMAC.shape[0]//region_number, queryMAC.shape[1]*region_number))
+#    db_con_rmac = DbMAC.reshape((DbMAC.shape[0]//region_number, DbMAC.shape[1]*region_number))
+#    query_con_rmac = l2_normalize(query_con_rmac)
+#    db_con_rmac = l2_normalize(db_con_rmac)
+#    print('reshape concate per image', db_con_rmac.shape)
+
+    # pca decom_l2
+    #all_vecs = np.concatenate([query_con_rmac, db_con_rmac])
+    #print('pca rmac all second')
+    #all_pca_vecs = PCA(256).fit_transform(all_vecs)
+    #all_pca_vecs = l2_normalize(all_pca_vecs)
+    #query_con_rmac = all_pca_vecs[:query_con_rmac.shape[0],:]
+    #db_con_rmac = all_pca_vecs[query_con_rmac.shape[0]:,:]
+######################################
+    
+    # l2
+    #queryMAC_sumpool = l2_normalize(queryMAC_sumpool)
+    #DbMAC_sumpool = l2_normalize(DbMAC_sumpool)
+    gap_query_vecs = l2_normalize(gap_query_vecs)
+    gap_reference_vecs = l2_normalize(gap_reference_vecs)
+
+    query_vecs = np.concatenate([queryMAC_sumpool,gap_query_vecs],axis=1)
+    reference_vecs = np.concatenate([DbMAC_sumpool, gap_reference_vecs],axis=1)
+
+    # l2 normalization
+    query_vecs = l2_normalize(query_vecs)
+    reference_vecs = l2_normalize(reference_vecs)
+
+    # pca
+    all_vecs = np.concatenate([query_vecs, reference_vecs])
+    all_pca_vecs = PCA(1024).fit_transform(all_vecs)
+    query_vecs = all_pca_vecs[:query_vecs.shape[0],:]
+    reference_vecs = all_pca_vecs[query_vecs.shape[0]:,:]
+
+    # l2 normalization
+    query_vecs = l2_normalize(query_vecs)
+    reference_vecs = l2_normalize(reference_vecs)
+
+    # Calculate cosine similarity for QE
+    qe_iter = 1
+    qe_number = 19
+    weights = np.logspace(0, -1.5, (qe_number+1))
+    weights /= weights.sum()
+    pre_sim_matrix = np.dot(query_vecs, reference_vecs.T)
+    pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+    pre_indices = np.flip(pre_indices, axis=1) #higher first
+    for i in range(query_vecs.shape[0]):
+        query_vecs[i] *= weights[0]
+        for refidx in range(qe_number):
+            query_vecs[i] += reference_vecs[pre_indices[i][refidx]]*weights[refidx+1]
+
+    # after query expanstion l2 normalization
+    query_vecs = l2_normalize(query_vecs)
+
+    # Calculate cosine similarity for DBA
+    dba_iter = 1
+    dba_number = 9
+    weights = np.logspace(0, -1.5, (dba_number+1))
+    weights /= weights.sum()
+    pre_sim_matrix = np.dot(reference_vecs, query_vecs.T)
+    pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+    pre_indices = np.flip(pre_indices, axis=1) #higher first
+    for i in range(reference_vecs.shape[0]):
+        reference_vecs[i] *= weights[0]
+        for refidx in range(dba_number):
+            reference_vecs[i] += query_vecs[pre_indices[i][refidx]]*weights[refidx+1]
+
+    # after database augment l2 normalization
+    reference_vecs = l2_normalize(reference_vecs)
+
+
+
+    # LAST Calculate cosine similarity
+    qe_sim_matrix = np.dot(query_vecs, reference_vecs.T)
+    qe_indices = np.argsort(qe_sim_matrix, axis=1)
+    qe_indices = np.flip(qe_indices, axis=1)
+
+    return queries, query_vecs, db, reference_vecs, qe_indices
 
 def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1,use_gap_net=False):
     base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)

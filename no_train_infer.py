@@ -68,7 +68,7 @@ def bind_model(model):
         queries.sort()
         db.sort()
 
-        queries, query_vecs, references, reference_vecs, indices = get_feature(model, queries, db, (299,299))
+        queries, query_vecs, references, reference_vecs, indices = get_feature(model, queries, db, (333,333))
 
 
 
@@ -220,7 +220,7 @@ def get_feature(model, queries, db, img_size):
 
     # pca
     all_vecs = np.concatenate([query_vecs, reference_vecs])
-    all_pca_vecs = PCA(786).fit_transform(all_vecs)
+    all_pca_vecs = PCA(1024).fit_transform(all_vecs)
     query_vecs = all_pca_vecs[:query_vecs.shape[0],:]
     reference_vecs = all_pca_vecs[query_vecs.shape[0]:,:]
 
@@ -439,7 +439,7 @@ if __name__ == '__main__':
     nb_epoch = config.epoch
     batch_size = config.batch_size
     num_classes = config.num_classes
-    input_shape = (299,299,3)#(224, 224, 3)  # input image shape
+    input_shape = (333,333,3)#(224, 224, 3)  # input image shape
     use_gap_net = False
     opt = keras.optimizers.Adam(lr=0.0005)
     model = build_model(backbone= InceptionResNetV2, input_shape = input_shape, use_imagenet = None, num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
@@ -452,5 +452,8 @@ if __name__ == '__main__':
     if config.mode == 'train':
         bTrainmode = True
 
-    nsml.load(checkpoint='secls_222_27', session='Zonber/ir_ph2/314') #InceptionResnetV2 222
-    nsml.save('over_over_fitting')  # this is display model name at lb
+    #nsml.load(checkpoint='secls_222_27', session='Zonber/ir_ph2/314') #InceptionResnetV2 222
+    #nsml.save('over_over_fitting')  # this is display model name at lb
+    for i in range(8,17):
+        nsml.load(checkpoint='secls_222_'+str(i), session='Zonber/ir_ph2/450')
+        nsml.save('secls_222_'+str(i))
