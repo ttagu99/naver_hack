@@ -198,7 +198,7 @@ def apply_whitening(listData, Xm, W) :
 def sumPooling(listData, numberImages, largeScaleRetrieval=False):
 	newListData = []
 	value = 0
-	regions = listData.shape[0] // numberImages
+	regions = len(listData) // numberImages
 	for i, elem in enumerate(listData, 1):
 		value = np.add(value,elem)
 		if (i%regions==0):

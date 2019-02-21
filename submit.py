@@ -8,7 +8,7 @@ import pandas as pd
 
 team_name = "Zonber"       
 data_name = "ir_ph2"     
-start_wait_sec =  13*60#35*60
+start_wait_sec =  6*60#35*60
 submit_list_path  = './submit_list.csv'
 
 def run_submit(command):

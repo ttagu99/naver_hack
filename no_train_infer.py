@@ -47,6 +47,8 @@ from keras.losses import categorical_crossentropy
 from utils import *
 import pickle
 from sklearn.decomposition import PCA
+import psutil
+
 
 def bind_model(model):
     def save(dir_name):
@@ -60,22 +62,29 @@ def bind_model(model):
 
     def infer(queries, _):
         test_path = DATASET_PATH + '/test/test_data'
-
         db = [os.path.join(test_path, 'reference', path) for path in os.listdir(os.path.join(test_path, 'reference'))]
-
         queries = [v.split('/')[-1].split('.')[0] for v in queries]
         db = [v.split('/')[-1].split('.')[0] for v in db]
         queries.sort()
         db.sort()
 
-        queries, query_vecs, references, reference_vecs, indices = get_feature(model, queries, db, (299,299))
+        num_classes = config.num_classes
 
+        queries, query_vecs, references, reference_vecs = get_feature_only(model, queries, db, lr=False)
+        gc.collect()
+        queries, query_vecs_lr, references, reference_vecs_lr = get_feature_only(model, queries, db, lr=True)
 
+        query_vecs = np.concatenate([query_vecs,query_vecs_lr],axis=1)
+        reference_vecs = np.concatenate([reference_vecs, reference_vecs_lr],axis=1)
+
+        print('complete docom_feature  ',psutil.virtual_memory(), 'reference_vecs  shape', reference_vecs.shape)
+        query_vecs = l2_normalize(query_vecs)
+        reference_vecs = l2_normalize(reference_vecs)
 
         # Calculate cosine similarity
-        #sim_matrix = np.dot(query_vecs, reference_vecs.T)
-        #indices = np.argsort(sim_matrix, axis=1)
-        #indices = np.flip(indices, axis=1)
+        sim_matrix = np.dot(query_vecs, reference_vecs.T)
+        indices = np.argsort(sim_matrix, axis=1)
+        indices = np.flip(indices, axis=1)
 
         retrieval_results = {}
 
@@ -98,99 +107,81 @@ def l2_normalize(v):
     #    return v
     return v / norm[:,None]
 
-def extractHueHistogram(img):
-   #img = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
-   img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-   hue = img[:,:,0] ###range: 0-180 (to fit range 0, 255)
-   histogram_hue = np.zeros(180, dtype=np.float)
-   histogram_hue = np.bincount(hue.ravel(), minlength=180).astype(np.float)
-   num_pixels = (img.shape[0] * img.shape[1])
-   histogram_hue /= num_pixels
-   return histogram_hue
 
-def docom_feature(query_vecs,reference_vecs,gap_query_vecs,gap_reference_vecs):
-    L=3
+def get_feature_only(model, queries, db, img_size=(299,299), lr=False):
+    #    img_size = (224, 224)
+    batch_size = 200
+    # topResultsQE=5
+    L = 2
+
+    test_path = DATASET_PATH + '/test/test_data'
+    intermediate_layer_model = Model(inputs=model.input,
+                                    outputs=[model.get_layer('GAP_LAST').input, model.get_layer('GAP_LAST').output])
+    # test_datagen = ImageDataGenerator(preprocessing_function=aug_out_featurewise_val)
+    if lr ==True:
+        test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True,
+                                        samplewise_std_normalization=True)
+    else:
+        test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True,
+                                        samplewise_std_normalization=True, preprocessing_function = np.fliplr)
+
+    query_generator = test_datagen.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['query'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )
+
+    query_vecs, gap_query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),
+                                                                            workers=4)
+    print('complete predict query_vecs  ',psutil.virtual_memory(), 'quer vec  shape', query_vecs.shape)
+    reference_generator = test_datagen.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['reference'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )
+
+    reference_vecs, gap_reference_vecs = intermediate_layer_model.predict_generator(reference_generator,
+                                                                                    steps=len(reference_generator),
+                                                                                    workers=4)
+    print('complete predict reference_vecs  ',psutil.virtual_memory(), 'reference_vecs  shape', query_vecs.shape)
+
     # ------------------ DB images: reading, descripting and whitening -----------------------
     DbMAC = extractRMAC(reference_vecs, True, L)
-    DbMAC = np.array(DbMAC)
+    #DbMAC = np.array(DbMAC)
     DbMAC_sumpool = sumPooling(DbMAC, reference_vecs.shape[0], False)
-    print('DbMAC_sumpool lenght',len(DbMAC_sumpool))
-
+    print('DbMAC_sumpool lenght',len(DbMAC_sumpool),DbMAC_sumpool[0].shape,psutil.virtual_memory() )
     # ------------------- query images: reading, descripting and whitening -----------------------
     queryMAC = extractRMAC(query_vecs, True, L)
-    queryMAC = np.array(queryMAC)
+    #queryMAC = np.array(queryMAC)
     queryMAC_sumpool = sumPooling(queryMAC, query_vecs.shape[0], False)
-    print('queryMAC_sumpool lenght',len(queryMAC_sumpool))
+    print('queryMAC_sumpool lenght',len(queryMAC_sumpool),queryMAC_sumpool[0].shape,psutil.virtual_memory() )
+
+
 
     DbMAC_sumpool = np.array(DbMAC_sumpool)
     DbMAC_sumpool = DbMAC_sumpool.squeeze()
+    print('DbMAC_sumpool shape',DbMAC_sumpool.shape,psutil.virtual_memory() )
     queryMAC_sumpool = np.array(queryMAC_sumpool)
     queryMAC_sumpool = queryMAC_sumpool.squeeze()
+    print('queryMAC_sumpool shape',queryMAC_sumpool.shape,psutil.virtual_memory() )
 
-######################################
- #   queryMAC = queryMAC.squeeze()
- #   DbMAC = DbMAC.squeeze()
- #   print('DbMAC.shape',DbMAC.shape)
-	### query regions - db regions l2_nor
- #   queryMAC = l2_normalize(queryMAC)
- #   DbMAC = l2_normalize(DbMAC)
- #   region_number = queryMAC.shape[0]//query_vecs.shape[0]
- #   print('DbMAC.shape',DbMAC.shape, 'region number', region_number)
- #   query_con_rmac = queryMAC.reshape((queryMAC.shape[0]//region_number, queryMAC.shape[1]*region_number))
- #   db_con_rmac = DbMAC.reshape((DbMAC.shape[0]//region_number, DbMAC.shape[1]*region_number))
- #   print('query_con_rmac.shape',query_con_rmac.shape,'db_con_rmac.shape',db_con_rmac.shape)
- #    # pca decom_l2
- #   all_vecs = np.concatenate([query_con_rmac, db_con_rmac])
- #   print('pca rmac all')
- #   all_pca_vecs = PCA(256).fit_transform(all_vecs)
- #   print('pca rmac all l2')
- #   all_pca_vecs = l2_normalize(all_pca_vecs)
- #   print('query_con_rmac')
- #   query_con_rmac = all_pca_vecs[:query_con_rmac.shape[0],:]
- #   print('db_con_rmac')
- #   db_con_rmac = all_pca_vecs[query_con_rmac.shape[0]:,:]
- #   print('reshape concate per image', db_con_rmac.shape)
- #######################################
-
-##   # query regions - db regions simimlarity
-#     # pca decom_l2
-#    all_vecs = np.concatenate([queryMAC, DbMAC])
-#    print('pca rmac all')
-#    all_pca_vecs = PCA(128).fit_transform(all_vecs)
-#    all_pca_vecs = l2_normalize(all_pca_vecs)
-#    queryMAC = all_pca_vecs[:queryMAC.shape[0],:]
-#    DbMAC = all_pca_vecs[queryMAC.shape[0]:,:]
-#    region_number = queryMAC.shape[0]//query_vecs.shape[0]
-#    print('DbMAC.shape',DbMAC.shape, 'region number', region_number)
-#    #concate
-#    query_con_rmac = queryMAC.reshape((queryMAC.shape[0]//region_number, queryMAC.shape[1]*region_number))
-#    db_con_rmac = DbMAC.reshape((DbMAC.shape[0]//region_number, DbMAC.shape[1]*region_number))
-#    query_con_rmac = l2_normalize(query_con_rmac)
-#    db_con_rmac = l2_normalize(db_con_rmac)
-#    print('reshape concate per image', db_con_rmac.shape)
-
-    # pca decom_l2
-    #all_vecs = np.concatenate([query_con_rmac, db_con_rmac])
-    #print('pca rmac all second')
-    #all_pca_vecs = PCA(256).fit_transform(all_vecs)
-    #all_pca_vecs = l2_normalize(all_pca_vecs)
-    #query_con_rmac = all_pca_vecs[:query_con_rmac.shape[0],:]
-    #db_con_rmac = all_pca_vecs[query_con_rmac.shape[0]:,:]
-######################################
-    
-    # l2
-    #queryMAC_sumpool = l2_normalize(queryMAC_sumpool)
-    #DbMAC_sumpool = l2_normalize(DbMAC_sumpool)
     gap_query_vecs = l2_normalize(gap_query_vecs)
     gap_reference_vecs = l2_normalize(gap_reference_vecs)
 
     query_vecs = np.concatenate([queryMAC_sumpool,gap_query_vecs],axis=1)
     reference_vecs = np.concatenate([DbMAC_sumpool, gap_reference_vecs],axis=1)
-
+    print('complete concate gap sum, query_vecs shape',query_vecs.shape,psutil.virtual_memory() )
     # l2 normalization
     query_vecs = l2_normalize(query_vecs)
     reference_vecs = l2_normalize(reference_vecs)
-
     # pca
     all_vecs = np.concatenate([query_vecs, reference_vecs])
     all_pca_vecs = PCA(1024).fit_transform(all_vecs)
@@ -200,7 +191,7 @@ def docom_feature(query_vecs,reference_vecs,gap_query_vecs,gap_reference_vecs):
     # l2 normalization
     query_vecs = l2_normalize(query_vecs)
     reference_vecs = l2_normalize(reference_vecs)
-
+    print('complete pca, query_vecs shape',query_vecs.shape,psutil.virtual_memory() )
     # Calculate cosine similarity for QE
     qe_iter = 2
     qe_number = 19
@@ -234,93 +225,268 @@ def docom_feature(query_vecs,reference_vecs,gap_query_vecs,gap_reference_vecs):
 
         # after database augment l2 normalization
         reference_vecs = l2_normalize(reference_vecs)
-        
-    return query_vecs, reference_vecs
-
-# data preprocess
-def get_feature(model, queries, db, img_size):
-#    img_size = (224, 224)
+    print('query expansion complete',query_vecs.shape,psutil.virtual_memory() )
 
 
-    batch_size = 200
-    #topResultsQE=5
-    test_path = DATASET_PATH + '/test/test_data'
-    intermediate_layer_model = Model(inputs=model.input, outputs=[model.get_layer('GAP_LAST').input,model.get_layer('GAP_LAST').output])
-    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
-    test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True,preprocessing_function = np.fliplr)    
-    #huehist_gen = ImageDataGenerator()
-    #huehist_generator = huehist_gen.flow_from_directory(
-    #    directory=test_path,
-    #    target_size=img_size,
-    #    classes=['query'],
-    #    color_mode="rgb",
-    #    batch_size=1,
-    #    class_mode=None,
-    #    shuffle=False
-    #)
+    return queries, query_vecs, db, reference_vecs
 
-    #for i in range(huehist_gen)
+## data preprocess
+#def get_feature(model, queries, db, img_size):
+##    img_size = (224, 224)
+#    batch_size = 200
+#    #topResultsQE=5
+#    test_path = DATASET_PATH + '/test/test_data'
+#    intermediate_layer_model = Model(inputs=model.input, outputs=[model.get_layer('GAP_LAST').input,model.get_layer('GAP_LAST').output])
+#    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
+#    test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True,preprocessing_function = np.fliplr)    
+#    #huehist_gen = ImageDataGenerator()
+#    #huehist_generator = huehist_gen.flow_from_directory(
+#    #    directory=test_path,
+#    #    target_size=img_size,
+#    #    classes=['query'],
+#    #    color_mode="rgb",
+#    #    batch_size=1,
+#    #    class_mode=None,
+#    #    shuffle=False
+#    #)
 
-
-    query_generator = test_datagen.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['query'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )
-    query_generator_lr = test_datagen_lr.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['query'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )    
-
-
-    query_vecs, gap_query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),workers=4)
-    query_vecs_lr,gap_query_vecs_lr = intermediate_layer_model.predict_generator(query_generator_lr, steps=len(query_generator_lr),workers=4)
-
-    reference_generator = test_datagen.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['reference'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )
-    reference_generator_lr = test_datagen_lr.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['reference'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )
-    reference_vecs, gap_reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
-    reference_vecs_lr,gap_reference_vecs_lr = intermediate_layer_model.predict_generator(reference_generator_lr, steps=len(reference_generator_lr),workers=4)
-
+#    #for i in range(huehist_gen)
     
-    query_vecs, reference_vecs = docom_feature(query_vecs,reference_vecs,gap_query_vecs,gap_reference_vecs)
-    query_vecs_lr, reference_vecs_lr = docom_feature(query_vecs_lr,reference_vecs_lr,gap_query_vecs_lr,gap_reference_vecs_lr)
-    query_vecs = np.concatenate([query_vecs,query_vecs_lr],axis=1)
-    reference_vecs = np.concatenate([reference_vecs,reference_vecs_lr],axis=1)
 
-    query_vecs =l2_normalize(query_vecs)
-    reference_vecs = l2_normalize(reference_vecs)
+#    query_generator = test_datagen.flow_from_directory(
+#        directory=test_path,
+#        target_size=img_size,
+#        classes=['query'],
+#        color_mode="rgb",
+#        batch_size=batch_size,
+#        class_mode=None,
+#        shuffle=False
+#    )
+#    reference_generator = test_datagen.flow_from_directory(
+#        directory=test_path,
+#        target_size=img_size,
+#        classes=['reference'],
+#        color_mode="rgb",
+#        batch_size=batch_size,
+#        class_mode=None,
+#        shuffle=False
+#    )
+#    query_vecs, gap_query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator)*20,workers=4)
+#    print('complete predict quer',psutil.virtual_memory(), 'quer vec shape', query_vecs.shape)
+#    reference_vecs, gap_reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator)*10,workers=4)
+#    print('complete predict ref',psutil.virtual_memory(), 'ref vec shape', reference_vecs.shape) 
+################################
+#    L=3
+#    # ------------------ DB images: reading, descripting and whitening -----------------------
+#    DbMAC = extractRMAC(reference_vecs, True, L)
+#    #DbMAC = np.array(DbMAC)
+#    DbMAC_sumpool = sumPooling(DbMAC, reference_vecs.shape[0], False)
+#    print('DbMAC_sumpool lenght',len(DbMAC_sumpool),DbMAC_sumpool[0].shape,psutil.virtual_memory() )
 
-    # LAST Calculate cosine similarity
-    qe_sim_matrix = np.dot(query_vecs, reference_vecs.T)
-    qe_indices = np.argsort(qe_sim_matrix, axis=1)
-    qe_indices = np.flip(qe_indices, axis=1)
+#    # ------------------- query images: reading, descripting and whitening -----------------------
+#    queryMAC = extractRMAC(query_vecs, True, L)
+#    #queryMAC = np.array(queryMAC)
+#    queryMAC_sumpool = sumPooling(queryMAC, query_vecs.shape[0], False)
+#    print('queryMAC_sumpool lenght',len(queryMAC_sumpool),queryMAC_sumpool[0].shape,psutil.virtual_memory() )
+ 
+#    DbMAC_sumpool = np.array(DbMAC_sumpool)
+#    DbMAC_sumpool = DbMAC_sumpool.squeeze()
+#    print('DbMAC_sumpool shape',DbMAC_sumpool.shape,psutil.virtual_memory() )
+#    queryMAC_sumpool = np.array(queryMAC_sumpool)
+#    queryMAC_sumpool = queryMAC_sumpool.squeeze()
+#    print('queryMAC_sumpool shape',queryMAC_sumpool.shape,psutil.virtual_memory() )
 
-    return queries, query_vecs, db, reference_vecs, qe_indices
+
+#    gap_query_vecs = l2_normalize(gap_query_vecs)
+#    gap_reference_vecs = l2_normalize(gap_reference_vecs)
+
+#    query_vecs = np.concatenate([queryMAC_sumpool,gap_query_vecs],axis=1)
+#    reference_vecs = np.concatenate([DbMAC_sumpool, gap_reference_vecs],axis=1)
+#    #del queryMAC_sumpool
+#    #del DbMAC_sumpool
+#    #gc.collect()
+#    print('complete concate gap sum, query_vecs shape',query_vecs.shape,psutil.virtual_memory() )
+#    # l2 normalization
+#    query_vecs = l2_normalize(query_vecs)
+#    reference_vecs = l2_normalize(reference_vecs)
+
+#    # pca
+#    all_vecs = np.concatenate([query_vecs, reference_vecs])
+#    all_pca_vecs = PCA(1024).fit_transform(all_vecs)
+#    query_vecs = all_pca_vecs[:query_vecs.shape[0],:]
+#    reference_vecs = all_pca_vecs[query_vecs.shape[0]:,:]
+
+#    # l2 normalization
+#    query_vecs = l2_normalize(query_vecs)
+#    reference_vecs = l2_normalize(reference_vecs)
+#    #del all_vecs
+#    #del all_pca_vecs
+#    #gc.collect()
+#    print('complete pca, query_vecs shape',query_vecs.shape,psutil.virtual_memory() )
+#    # Calculate cosine similarity for QE
+#    qe_iter = 2
+#    qe_number = 19
+#    dba_number = 9
+#    for i in range(qe_iter):
+#        qe_number = qe_number // (i+1)
+#        dba_number = dba_number // (i+1)
+#        weights = np.logspace(0, -1.5, (qe_number+1))
+#        weights /= weights.sum()
+#        pre_sim_matrix = np.dot(query_vecs, reference_vecs.T)
+#        pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+#        pre_indices = np.flip(pre_indices, axis=1) #higher first
+#        for i in range(query_vecs.shape[0]):
+#            query_vecs[i] *= weights[0]
+#            for refidx in range(qe_number):
+#                query_vecs[i] += reference_vecs[pre_indices[i][refidx]]*weights[refidx+1]
+
+#        # after query expanstion l2 normalization
+#        query_vecs = l2_normalize(query_vecs)
+
+#        # Calculate cosine similarity for DBA
+#        weights = np.logspace(0, -1.5, (dba_number+1))
+#        weights /= weights.sum()
+#        pre_sim_matrix = np.dot(reference_vecs, query_vecs.T)
+#        pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+#        pre_indices = np.flip(pre_indices, axis=1) #higher first
+#        for i in range(reference_vecs.shape[0]):
+#            reference_vecs[i] *= weights[0]
+#            for refidx in range(dba_number):
+#                reference_vecs[i] += query_vecs[pre_indices[i][refidx]]*weights[refidx+1]
+
+#        # after database augment l2 normalization
+#        reference_vecs = l2_normalize(reference_vecs)    
+
+#    decom_query_vecs = query_vecs.copy()
+#    decom_reference_vecs = reference_vecs.copy()    
+#    #decom_query_vecs, decom_reference_vecs = docom_feature(query_vecs,reference_vecs,gap_query_vecs,gap_reference_vecs)
+#    print('complete docom_feature',psutil.virtual_memory() )
+
+
+#    query_generator_lr = test_datagen_lr.flow_from_directory(
+#        directory=test_path,
+#        target_size=img_size,
+#        classes=['query'],
+#        color_mode="rgb",
+#        batch_size=batch_size,
+#        class_mode=None,
+#        shuffle=False
+#    )    
+#    reference_generator_lr = test_datagen_lr.flow_from_directory(
+#        directory=test_path,
+#        target_size=img_size,
+#        classes=['reference'],
+#        color_mode="rgb",
+#        batch_size=batch_size,
+#        class_mode=None,
+#        shuffle=False
+#    )
+
+#    query_vecs,gap_query_vecs = intermediate_layer_model.predict_generator(query_generator_lr, steps=len(query_generator_lr)*20,workers=4)
+#    print('complete predict quer lr ',psutil.virtual_memory(), 'quer vec lr shape', query_vecs_lr.shape)   
+#    reference_vecs,gap_reference_vecs = intermediate_layer_model.predict_generator(reference_generator_lr, steps=len(reference_generator_lr)*10,workers=4)
+#    print('complete predict ref lr ',psutil.virtual_memory(), 'ref vec lr shape', reference_vecs.shape)
+###################################################
+#    # ------------------ DB images: reading, descripting and whitening -----------------------
+#    DbMAC = extractRMAC(reference_vecs, True, L)
+#    #DbMAC = np.array(DbMAC)
+#    DbMAC_sumpool = sumPooling(DbMAC, reference_vecs.shape[0], False)
+#    print('DbMAC_sumpool lenght',len(DbMAC_sumpool),DbMAC_sumpool[0].shape,psutil.virtual_memory() )
+
+#    # ------------------- query images: reading, descripting and whitening -----------------------
+#    queryMAC = extractRMAC(query_vecs, True, L)
+#    #queryMAC = np.array(queryMAC)
+#    queryMAC_sumpool = sumPooling(queryMAC, query_vecs.shape[0], False)
+#    print('queryMAC_sumpool lenght',len(queryMAC_sumpool),queryMAC_sumpool[0].shape,psutil.virtual_memory() )
+ 
+#    DbMAC_sumpool = np.array(DbMAC_sumpool)
+#    DbMAC_sumpool = DbMAC_sumpool.squeeze()
+#    print('DbMAC_sumpool shape',DbMAC_sumpool.shape,psutil.virtual_memory() )
+#    queryMAC_sumpool = np.array(queryMAC_sumpool)
+#    queryMAC_sumpool = queryMAC_sumpool.squeeze()
+#    print('queryMAC_sumpool shape',queryMAC_sumpool.shape,psutil.virtual_memory() )
+
+
+#    gap_query_vecs = l2_normalize(gap_query_vecs)
+#    gap_reference_vecs = l2_normalize(gap_reference_vecs)
+
+#    query_vecs = np.concatenate([queryMAC_sumpool,gap_query_vecs],axis=1)
+#    reference_vecs = np.concatenate([DbMAC_sumpool, gap_reference_vecs],axis=1)
+#    #del queryMAC_sumpool
+#    #del DbMAC_sumpool
+#    #gc.collect()
+#    print('complete concate gap sum, query_vecs shape',query_vecs.shape,psutil.virtual_memory() )
+#    # l2 normalization
+#    query_vecs = l2_normalize(query_vecs)
+#    reference_vecs = l2_normalize(reference_vecs)
+
+#    # pca
+#    all_vecs = np.concatenate([query_vecs, reference_vecs])
+#    all_pca_vecs = PCA(1024).fit_transform(all_vecs)
+#    query_vecs = all_pca_vecs[:query_vecs.shape[0],:]
+#    reference_vecs = all_pca_vecs[query_vecs.shape[0]:,:]
+
+#    # l2 normalization
+#    query_vecs = l2_normalize(query_vecs)
+#    reference_vecs = l2_normalize(reference_vecs)
+#    #del all_vecs
+#    #del all_pca_vecs
+#    #gc.collect()
+#    print('complete pca, query_vecs shape',query_vecs.shape,psutil.virtual_memory() )
+#    # Calculate cosine similarity for QE
+#    qe_iter = 2
+#    qe_number = 19
+#    dba_number = 9
+#    for i in range(qe_iter):
+#        qe_number = qe_number // (i+1)
+#        dba_number = dba_number // (i+1)
+#        weights = np.logspace(0, -1.5, (qe_number+1))
+#        weights /= weights.sum()
+#        pre_sim_matrix = np.dot(query_vecs, reference_vecs.T)
+#        pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+#        pre_indices = np.flip(pre_indices, axis=1) #higher first
+#        for i in range(query_vecs.shape[0]):
+#            query_vecs[i] *= weights[0]
+#            for refidx in range(qe_number):
+#                query_vecs[i] += reference_vecs[pre_indices[i][refidx]]*weights[refidx+1]
+
+#        # after query expanstion l2 normalization
+#        query_vecs = l2_normalize(query_vecs)
+
+#        # Calculate cosine similarity for DBA
+#        weights = np.logspace(0, -1.5, (dba_number+1))
+#        weights /= weights.sum()
+#        pre_sim_matrix = np.dot(reference_vecs, query_vecs.T)
+#        pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+#        pre_indices = np.flip(pre_indices, axis=1) #higher first
+#        for i in range(reference_vecs.shape[0]):
+#            reference_vecs[i] *= weights[0]
+#            for refidx in range(dba_number):
+#                reference_vecs[i] += query_vecs[pre_indices[i][refidx]]*weights[refidx+1]
+
+#        # after database augment l2 normalization
+#        reference_vecs = l2_normalize(reference_vecs)       
+    
+#    #decom_query_vecs_lr, decom_reference_vecs_lr = docom_feature(query_vecs,reference_vecs,gap_query_vecs,gap_reference_vecs)
+#    print('complete docom_feature lr',psutil.virtual_memory())
+#    del gap_query_vecs
+#    del gap_reference_vecs
+#    gc.collect()
+
+
+
+
+#    con_query_vecs = np.concatenate([decom_query_vecs,query_vecs],axis=1)
+#    con_reference_vecs = np.concatenate([decom_reference_vecs,reference_vecs],axis=1)
+#    print('complete np.concatenate',psutil.virtual_memory())
+#    # LAST Calculate cosine similarity
+#    qe_sim_matrix = np.dot(con_query_vecs, con_reference_vecs.T)
+#    print('complete np.dot',psutil.virtual_memory())
+#    qe_indices = np.argsort(qe_sim_matrix, axis=1)
+#    qe_indices = np.flip(qe_indices, axis=1)
+#    del qe_sim_matrix
+#    gc.collect()
+#    return queries, query_vecs, db, reference_vecs, qe_indices
 
 def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imagenet', num_classes=1383, base_freeze=True, opt = SGD(), NUM_GPU=1,use_gap_net=False):
     base_model = backbone(input_shape=input_shape, weights=use_imagenet, include_top= False)#, classes=NCATS)
@@ -492,11 +658,18 @@ if __name__ == '__main__':
     nb_epoch = config.epoch
     batch_size = config.batch_size
     num_classes = config.num_classes
-    input_shape = (299,299,3)#(224, 224, 3)  # input image shape
+    input_shape_large = (299,299,3)
+    input_shape_small = (224, 224, 3)  # input image shape
     use_gap_net = False
     opt = keras.optimizers.Adam(lr=0.0005)
-    model = build_model(backbone= InceptionResNetV2, input_shape = input_shape, use_imagenet = None, num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
+
+        
+    model = build_model(backbone= InceptionResNetV2, input_shape = input_shape_large, use_imagenet = None, num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
     bind_model(model)
+
+    #nsml.load(checkpoint='secls_222_33', session='Zonber/ir_ph2/314') #InceptionResnetV2 222
+    #nsml.save('large')  # this is display model name at lb
+
 
     if config.pause:
         nsml.paused(scope=locals())
@@ -505,8 +678,8 @@ if __name__ == '__main__':
     if config.mode == 'train':
         bTrainmode = True
 
-    nsml.load(checkpoint='secls_222_27', session='Zonber/ir_ph2/314') #InceptionResnetV2 222
-    nsml.save('over_over_fitting')  # this is display model name at lb
+    nsml.load(checkpoint='secls_222_33', session='Zonber/ir_ph2/314')
+    nsml.save('over_over_fitting')
     #for i in range(14,23):
     #    nsml.load(checkpoint='secls_222_'+str(i), session='Zonber/ir_ph2/450')
     #    nsml.save('secls_222_'+str(i))

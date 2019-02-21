@@ -10,6 +10,7 @@ setup(
         'imgaug==0.2.7',
         'image-classifiers',
         'pandas',
-        'kito'
+        'kito',
+        'psutil'
 	    ]
 )
