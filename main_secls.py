@@ -462,8 +462,8 @@ if __name__ == '__main__':
             img /= 255.0
             return img
 
-        train_datagen = ImageDataGenerator(validation_split=split_ratio,preprocessing_function = aug_out_scale) # set validation split
-        val_datagen = ImageDataGenerator(rescale=1. / 255.0, validation_split=split_ratio)
+        train_datagen = ImageDataGenerator(validation_split=split_ratio,preprocessing_function = aug_out_scale, samplewise_center=True, samplewise_std_normalization=True) # set validation split
+        val_datagen = ImageDataGenerator(rescale=1. / 255.0, validation_split=split_ratio, samplewise_center=True, samplewise_std_normalization=True)
 
         train_generator = train_datagen.flow_from_directory(
             directory=DATASET_PATH + '/train/train_data',
