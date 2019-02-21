@@ -160,7 +160,7 @@ def extractFeatures(imgs, model, RMAC, L, resolutionLevel, bBox=[], croppedActiv
 
 	return listData
 
-def extractRMAC(featuresList, model, RMAC, L, bBox=[], croppedActivations = False):
+def extractRMAC(featuresList, RMAC, L, bBox=[], croppedActivations = False):
 	t1 = time.clock()
 	listData = []
 	for features in featuresList:

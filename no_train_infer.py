@@ -98,53 +98,26 @@ def l2_normalize(v):
     #    return v
     return v / norm[:,None]
 
+def extractHueHistogram(img):
+   #img = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+   img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+   hue = img[:,:,0] ###range: 0-180 (to fit range 0, 255)
+   histogram_hue = np.zeros(180, dtype=np.float)
+   histogram_hue = np.bincount(hue.ravel(), minlength=180).astype(np.float)
+   num_pixels = (img.shape[0] * img.shape[1])
+   histogram_hue /= num_pixels
+   return histogram_hue
 
-# data preprocess
-def get_feature(model, queries, db, img_size):
-#    img_size = (224, 224)
-
-
-    batch_size = 200
-    #topResultsQE=5
+def docom_feature(query_vecs,reference_vecs,gap_query_vecs,gap_reference_vecs):
     L=3
-    test_path = DATASET_PATH + '/test/test_data'
-    intermediate_layer_model = Model(inputs=model.input, outputs=[model.get_layer('GAP_LAST').input,model.get_layer('GAP_LAST').output])
-    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
-    
-    query_generator = test_datagen.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['query'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )
-
-
-
-    query_vecs, gap_query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),workers=4)
-    reference_generator = test_datagen.flow_from_directory(
-        directory=test_path,
-        target_size=img_size,
-        classes=['reference'],
-        color_mode="rgb",
-        batch_size=batch_size,
-        class_mode=None,
-        shuffle=False
-    )
-
-    reference_vecs, gap_reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
-
-
     # ------------------ DB images: reading, descripting and whitening -----------------------
-    DbMAC = extractRMAC(reference_vecs, intermediate_layer_model, True, L)
+    DbMAC = extractRMAC(reference_vecs, True, L)
     DbMAC = np.array(DbMAC)
     DbMAC_sumpool = sumPooling(DbMAC, reference_vecs.shape[0], False)
     print('DbMAC_sumpool lenght',len(DbMAC_sumpool))
 
     # ------------------- query images: reading, descripting and whitening -----------------------
-    queryMAC = extractRMAC(query_vecs, intermediate_layer_model, True, L)
+    queryMAC = extractRMAC(query_vecs, True, L)
     queryMAC = np.array(queryMAC)
     queryMAC_sumpool = sumPooling(queryMAC, query_vecs.shape[0], False)
     print('queryMAC_sumpool lenght',len(queryMAC_sumpool))
@@ -229,38 +202,118 @@ def get_feature(model, queries, db, img_size):
     reference_vecs = l2_normalize(reference_vecs)
 
     # Calculate cosine similarity for QE
-    qe_iter = 1
+    qe_iter = 2
     qe_number = 19
-    weights = np.logspace(0, -1.5, (qe_number+1))
-    weights /= weights.sum()
-    pre_sim_matrix = np.dot(query_vecs, reference_vecs.T)
-    pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
-    pre_indices = np.flip(pre_indices, axis=1) #higher first
-    for i in range(query_vecs.shape[0]):
-        query_vecs[i] *= weights[0]
-        for refidx in range(qe_number):
-            query_vecs[i] += reference_vecs[pre_indices[i][refidx]]*weights[refidx+1]
-
-    # after query expanstion l2 normalization
-    query_vecs = l2_normalize(query_vecs)
-
-    # Calculate cosine similarity for DBA
-    dba_iter = 1
     dba_number = 9
-    weights = np.logspace(0, -1.5, (dba_number+1))
-    weights /= weights.sum()
-    pre_sim_matrix = np.dot(reference_vecs, query_vecs.T)
-    pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
-    pre_indices = np.flip(pre_indices, axis=1) #higher first
-    for i in range(reference_vecs.shape[0]):
-        reference_vecs[i] *= weights[0]
-        for refidx in range(dba_number):
-            reference_vecs[i] += query_vecs[pre_indices[i][refidx]]*weights[refidx+1]
+    for i in range(qe_iter):
+        qe_number = qe_number // (i+1)
+        dba_number = dba_number // (i+1)
+        weights = np.logspace(0, -1.5, (qe_number+1))
+        weights /= weights.sum()
+        pre_sim_matrix = np.dot(query_vecs, reference_vecs.T)
+        pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+        pre_indices = np.flip(pre_indices, axis=1) #higher first
+        for i in range(query_vecs.shape[0]):
+            query_vecs[i] *= weights[0]
+            for refidx in range(qe_number):
+                query_vecs[i] += reference_vecs[pre_indices[i][refidx]]*weights[refidx+1]
 
-    # after database augment l2 normalization
+        # after query expanstion l2 normalization
+        query_vecs = l2_normalize(query_vecs)
+
+        # Calculate cosine similarity for DBA
+        weights = np.logspace(0, -1.5, (dba_number+1))
+        weights /= weights.sum()
+        pre_sim_matrix = np.dot(reference_vecs, query_vecs.T)
+        pre_indices = np.argsort(pre_sim_matrix, axis=1) #lower first
+        pre_indices = np.flip(pre_indices, axis=1) #higher first
+        for i in range(reference_vecs.shape[0]):
+            reference_vecs[i] *= weights[0]
+            for refidx in range(dba_number):
+                reference_vecs[i] += query_vecs[pre_indices[i][refidx]]*weights[refidx+1]
+
+        # after database augment l2 normalization
+        reference_vecs = l2_normalize(reference_vecs)
+        
+    return query_vecs, reference_vecs
+
+# data preprocess
+def get_feature(model, queries, db, img_size):
+#    img_size = (224, 224)
+
+
+    batch_size = 200
+    #topResultsQE=5
+    test_path = DATASET_PATH + '/test/test_data'
+    intermediate_layer_model = Model(inputs=model.input, outputs=[model.get_layer('GAP_LAST').input,model.get_layer('GAP_LAST').output])
+    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
+    test_datagen_lr = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True,preprocessing_function = np.fliplr)    
+    #huehist_gen = ImageDataGenerator()
+    #huehist_generator = huehist_gen.flow_from_directory(
+    #    directory=test_path,
+    #    target_size=img_size,
+    #    classes=['query'],
+    #    color_mode="rgb",
+    #    batch_size=1,
+    #    class_mode=None,
+    #    shuffle=False
+    #)
+
+    #for i in range(huehist_gen)
+
+
+    query_generator = test_datagen.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['query'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )
+    query_generator_lr = test_datagen_lr.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['query'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )    
+
+
+    query_vecs, gap_query_vecs = intermediate_layer_model.predict_generator(query_generator, steps=len(query_generator),workers=4)
+    query_vecs_lr,gap_query_vecs_lr = intermediate_layer_model.predict_generator(query_generator_lr, steps=len(query_generator_lr),workers=4)
+
+    reference_generator = test_datagen.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['reference'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )
+    reference_generator_lr = test_datagen_lr.flow_from_directory(
+        directory=test_path,
+        target_size=img_size,
+        classes=['reference'],
+        color_mode="rgb",
+        batch_size=batch_size,
+        class_mode=None,
+        shuffle=False
+    )
+    reference_vecs, gap_reference_vecs = intermediate_layer_model.predict_generator(reference_generator, steps=len(reference_generator),workers=4)
+    reference_vecs_lr,gap_reference_vecs_lr = intermediate_layer_model.predict_generator(reference_generator_lr, steps=len(reference_generator_lr),workers=4)
+
+    
+    query_vecs, reference_vecs = docom_feature(query_vecs,reference_vecs,gap_query_vecs,gap_reference_vecs)
+    query_vecs_lr, reference_vecs_lr = docom_feature(query_vecs_lr,reference_vecs_lr,gap_query_vecs_lr,gap_reference_vecs_lr)
+    query_vecs = np.concatenate([query_vecs,query_vecs_lr],axis=1)
+    reference_vecs = np.concatenate([reference_vecs,reference_vecs_lr],axis=1)
+
+    query_vecs =l2_normalize(query_vecs)
     reference_vecs = l2_normalize(reference_vecs)
-
-
 
     # LAST Calculate cosine similarity
     qe_sim_matrix = np.dot(query_vecs, reference_vecs.T)

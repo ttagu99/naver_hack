@@ -66,7 +66,7 @@ def bind_model(model):
         queries.sort()
         db.sort()
 
-        queries, query_vecs, references, reference_vecs, indices = get_feature(model, queries, db, (333,333))
+        queries, query_vecs, references, reference_vecs, indices = get_feature(model, queries, db, (299,299))
 
 
 
@@ -105,9 +105,16 @@ def get_feature(model, queries, db, img_size):
     batch_size = 200
     #topResultsQE=5
     L=3
+    def aug_out_featurewise_val(img):
+        img = img.astype('float32')
+        img[:,:,0] = (img[:,:,0] - 144.618226)/(56.817922)#/r_std
+        img[:,:,1] = (img[:,:,1] - 132.191131)/(57.820693)#/g_std
+        img[:,:,2] = (img[:,:,2] - 119.101468)/(60.085783)#/b_std
+        return img
+
     test_path = DATASET_PATH + '/test/test_data'
     intermediate_layer_model = Model(inputs=model.input, outputs=[model.get_layer('GAP_LAST').input,model.get_layer('GAP_LAST').output])
-    test_datagen = ImageDataGenerator(rescale=1. / 255, dtype='float32', samplewise_center=True, samplewise_std_normalization=True)
+    test_datagen = ImageDataGenerator(preprocessing_function=aug_out_featurewise_val)
     
     query_generator = test_datagen.flow_from_directory(
         directory=test_path,
@@ -293,6 +300,7 @@ def build_model(backbone= None, input_shape =  (224,224,3), use_imagenet = 'imag
     return model
 
 
+
 class DataGenerator(keras.utils.Sequence):
     'Generates data for Keras'
     def __init__(self, image_paths, input_shape, labels, batch_size, aug_seq, num_classes, use_aug = True, shuffle = True, mean=None):
@@ -433,7 +441,7 @@ if __name__ == '__main__':
     nb_epoch = config.epoch
     batch_size = config.batch_size  #inception resnetv2 299 60 , seresnext101 299 26
     num_classes = config.num_classes
-    input_shape = (333,333,3)#(299,299,3)#(224, 224, 3)  # input image shape
+    input_shape = (299,299,3)#(299,299,3)#(224, 224, 3)  # input image shape
     use_gap_net = False
     opt = keras.optimizers.Adam(lr=0.0005)
     model = build_model(backbone= InceptionResNetV2, input_shape = input_shape, use_imagenet = None, num_classes=num_classes, base_freeze=True, opt =opt,use_gap_net=use_gap_net)
@@ -455,15 +463,28 @@ if __name__ == '__main__':
 
         split_ratio = 0.05
         SEED=222
-
         def aug_out_scale(img):
             img = seq.augment_image(img)
             img = img.astype('float32')
             img /= 255.0
             return img
+        def aug_out_featurewise_tr(img):
+            img = seq.augment_image(img)
+            img = img.astype('float32')
+            img[:,:,0] = (img[:,:,0] - 144.618226)/(56.817922)#/r_std
+            img[:,:,1] = (img[:,:,1] - 132.191131)/(57.820693)#/g_std
+            img[:,:,2] = (img[:,:,2] - 119.101468)/(60.085783)#/b_std
+            return img
 
-        train_datagen = ImageDataGenerator(validation_split=split_ratio,preprocessing_function = aug_out_scale, samplewise_center=True, samplewise_std_normalization=True) # set validation split
-        val_datagen = ImageDataGenerator(rescale=1. / 255.0, validation_split=split_ratio, samplewise_center=True, samplewise_std_normalization=True)
+        def aug_out_featurewise_val(img):
+            img = img.astype('float32')
+            img[:,:,0] = (img[:,:,0] - 144.618226)/(56.817922)#/r_std
+            img[:,:,1] = (img[:,:,1] - 132.191131)/(57.820693)#/g_std
+            img[:,:,2] = (img[:,:,2] - 119.101468)/(60.085783)#/b_std
+            return img
+
+        train_datagen = ImageDataGenerator(validation_split=split_ratio,preprocessing_function = aug_out_featurewise_tr ) # set validation split
+        val_datagen = ImageDataGenerator(validation_split=split_ratio, preprocessing_function=aug_out_featurewise_val)
 
         train_generator = train_datagen.flow_from_directory(
             directory=DATASET_PATH + '/train/train_data',
@@ -487,8 +508,8 @@ if __name__ == '__main__':
 
         """ Callback """
         monitor = 'val_loss'
-        reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=4,factor=0.2,verbose=1)
-        early_stop = EarlyStopping(monitor=monitor, patience=7)
+        reduce_lr = ReduceLROnPlateau(monitor=monitor, patience=7,factor=0.2,verbose=1)
+        early_stop = EarlyStopping(monitor=monitor, patience=9)
         best_model_path = './best_model' + str(SEED) + '.h5'
         checkpoint = ModelCheckpoint(best_model_path,monitor=monitor,verbose=1,save_best_only=True)
         report = report_nsml(prefix = 'secls',seed = SEED)
