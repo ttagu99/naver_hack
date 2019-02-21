@@ -47,6 +47,7 @@ from keras.losses import categorical_crossentropy
 from utils import *
 import pickle
 from sklearn.decomposition import PCA
+import gc
 import psutil
 
 
