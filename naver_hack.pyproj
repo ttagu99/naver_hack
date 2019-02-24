@@ -29,6 +29,7 @@
     <Compile Include="main_cls.py" />
     <Compile Include="main_secls.py" />
     <Compile Include="convert_reduce_model.py" />
+    <Compile Include="no_train_infer_combine.py" />
     <Compile Include="no_train_infer_triple.py" />
     <Compile Include="no_train_infer.py" />
     <Compile Include="main_triplet.py" />
